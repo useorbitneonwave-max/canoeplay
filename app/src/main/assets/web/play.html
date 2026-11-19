@@ -34,17 +34,37 @@
   ];
   let picture = PICTURES[0][0];
   try { picture = localStorage.getItem('canoePicture') || picture; } catch (e) {}
-  window.EJS_defaultOptions = { 'virtual-gamepad': 'disabled', 'shader': picture };
+  window.EJS_defaultOptions = { 'virtual-gamepad': 'disabled', 'shader': picture, 'rewindEnabled': 'enabled' };
   window.EJS_onGameStart = function () {
     document.getElementById('loading').style.display = 'none';
+    // remember for "Recently Played"
+    try {
+      const id = p.get('id');
+      let r = JSON.parse(localStorage.getItem('canoeRecent') || '[]').filter(x => x.id !== id);
+      r.unshift({ id: id, t: Date.now() });
+      localStorage.setItem('canoeRecent', JSON.stringify(r.slice(0, 40)));
+    } catch (e) {}
     if (window.Canoe) Canoe.setInGame(true, core);
   };
 
   function gm() { return window.EJS_emulator && EJS_emulator.gameManager; }
 
   // Controller input sent from the Android side
-  window.canoeInput = function (button, value) {
-    try { gm().simulateInput(0, button, value); } catch (e) {}
+  window.canoeInput = function (player, button, value) {
+    try { gm().simulateInput(player, button, value); } catch (e) {}
+  };
+  // Hold R2 = fast-forward, hold L2 = rewind (on systems that don't use those buttons)
+  window.canoeFast = function (on) {
+    try { gm().toggleFastForward(on ? 1 : 0); } catch (e) {}
+  };
+  window.canoeRewind = function (on) {
+    try { gm().toggleRewind(on ? 1 : 0); } catch (e) {}
+  };
+  window.canoeSaveSlot = function (n) {
+    try { gm().quickSave(n); toast('Saved to slot ' + n); } catch (e) { toast('Could not save'); }
+  };
+  window.canoeLoadSlot = function (n) {
+    try { gm().quickLoad(n); toast('Loaded slot ' + n); } catch (e) { toast('No save in slot ' + n); }
   };
   window.canoeSave = function () {
     try { gm().saveSaveFiles(); } catch (e) {}

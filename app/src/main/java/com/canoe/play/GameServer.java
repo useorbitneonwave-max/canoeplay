@@ -30,11 +30,13 @@ public class GameServer extends NanoHTTPD {
 
     private final AssetManager assets;
     private final RomLibrary library;
+    private final ArtFinder art;
 
     GameServer(Context ctx, int port, RomLibrary library) {
         super(port);
         this.assets = ctx.getAssets();
         this.library = library;
+        this.art = new ArtFinder(ctx);
     }
 
     @Override
@@ -53,6 +55,7 @@ public class GameServer extends NanoHTTPD {
                 return json(o.toString());
             }
             if (uri.startsWith("/rom/")) return rom(uri.substring("/rom/".length()));
+            if (uri.equals("/api/art")) return art(session);
             if (uri.equals("/api/upload") && session.getMethod() == Method.POST) return upload(session);
             if (uri.equals("/api/delete") && session.getMethod() == Method.POST) return delete(session);
             return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found");
@@ -85,6 +88,20 @@ public class GameServer extends NanoHTTPD {
         Response r = newFixedLengthResponse(Response.Status.OK, "application/octet-stream",
                 new FileInputStream(f), f.length());
         r.addHeader("Access-Control-Allow-Origin", "*");
+        return r;
+    }
+
+    private Response art(IHTTPSession session) {
+        List<String> sys = session.getParameters().get("sys");
+        List<String> stem = session.getParameters().get("stem");
+        if (sys == null || stem == null || sys.isEmpty() || stem.isEmpty()) {
+            return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Missing");
+        }
+        String url = art.find(sys.get(0), stem.get(0));
+        if (url == null) return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "No cover");
+        Response r = newFixedLengthResponse(Response.Status.REDIRECT_SEE_OTHER, MIME_PLAINTEXT, "");
+        r.addHeader("Location", url);
+        r.addHeader("Cache-Control", "max-age=86400");
         return r;
     }
 

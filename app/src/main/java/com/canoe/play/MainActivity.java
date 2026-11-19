@@ -42,8 +42,14 @@ public class MainActivity extends Activity {
     private volatile boolean analogCore = false;
     private boolean menuOpen = false;
 
-    // last sent state for stick / hat so we only send changes
-    private final int[] lastAxis = new int[24];
+    static final int MAX_PLAYERS = 4;
+    // last sent state per player for sticks / hat / triggers, so only changes are sent
+    private final int[][] lastAxis = new int[MAX_PLAYERS][24];
+    private final boolean[][] axisPressed = new boolean[MAX_PLAYERS][16];
+    private final boolean[] fastOn = new boolean[MAX_PLAYERS];
+    private final boolean[] rewindOn = new boolean[MAX_PLAYERS];
+    private int libraryAxisKey = -1;
+    private boolean chainingMenu = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -140,21 +146,28 @@ public class MainActivity extends Activity {
         web.evaluateJavascript(code, null);
     }
 
-    private void press(int button, boolean down) {
-        js("window.canoeInput&&canoeInput(" + button + "," + (down ? 1 : 0) + ")");
+    private void press(int player, int button, boolean down) {
+        js("window.canoeInput&&canoeInput(" + player + "," + button + "," + (down ? 1 : 0) + ")");
     }
 
-    private void pressAnalog(int slot, int value) {
-        js("window.canoeInput&&canoeInput(" + slot + "," + value + ")");
+    private void pressAnalog(int player, int slot, int value) {
+        js("window.canoeInput&&canoeInput(" + player + "," + slot + "," + value + ")");
+    }
+
+    /** Controller 1 = player 1, controller 2 = player 2 ... The TV remote counts as player 1. */
+    private static int playerFor(InputDevice dev) {
+        if (dev == null) return 0;
+        int n = dev.getControllerNumber();
+        return n <= 0 ? 0 : Math.min(MAX_PLAYERS - 1, n - 1);
     }
 
     /** Controller layout: buttons are matched by position, like RetroArch. */
     private static int mapButton(int keyCode) {
         switch (keyCode) {
-            case KeyEvent.KEYCODE_BUTTON_A: return B;      // bottom face button
-            case KeyEvent.KEYCODE_BUTTON_B: return A;      // right face button
-            case KeyEvent.KEYCODE_BUTTON_X: return Y;      // left face button
-            case KeyEvent.KEYCODE_BUTTON_Y: return X;      // top face button
+            case KeyEvent.KEYCODE_BUTTON_A: return B;      // bottom face button (✕)
+            case KeyEvent.KEYCODE_BUTTON_B: return A;      // right face button (○)
+            case KeyEvent.KEYCODE_BUTTON_X: return Y;      // left face button (▢)
+            case KeyEvent.KEYCODE_BUTTON_Y: return X;      // top face button (△)
             case KeyEvent.KEYCODE_BUTTON_L1: return L;
             case KeyEvent.KEYCODE_BUTTON_R1: return R;
             case KeyEvent.KEYCODE_BUTTON_L2: return L2;
@@ -172,6 +185,18 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void setFast(int player, boolean on) {
+        if (fastOn[player] == on) return;
+        fastOn[player] = on;
+        js("window.canoeFast&&canoeFast(" + (on ? 1 : 0) + ")");
+    }
+
+    private void setRewind(int player, boolean on) {
+        if (rewindOn[player] == on) return;
+        rewindOn[player] = on;
+        js("window.canoeRewind&&canoeRewind(" + (on ? 1 : 0) + ")");
+    }
+
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int code = e.getKeyCode();
@@ -181,21 +206,29 @@ public class MainActivity extends Activity {
         if (menuOpen) return super.dispatchKeyEvent(e);
 
         if (inGame) {
-            // Back on the remote, or the Home/Guide button on a controller, opens the pause menu
+            // Back on the remote, or the Home/PS button on a controller, opens the pause menu
             if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_BUTTON_MODE
                     || code == KeyEvent.KEYCODE_MENU) {
                 if (up) showPauseMenu();
                 return true;
             }
+            int player = playerFor(e.getDevice());
+            // Triggers: hold R2 to fast-forward, hold L2 to rewind (systems without L2/R2 buttons)
+            if (!analogCore && (code == KeyEvent.KEYCODE_BUTTON_L2 || code == KeyEvent.KEYCODE_BUTTON_R2)) {
+                if (e.getRepeatCount() == 0 && (down || up)) {
+                    if (code == KeyEvent.KEYCODE_BUTTON_R2) setFast(player, down); else setRewind(player, down);
+                }
+                return true;
+            }
             int btn = mapButton(code);
             if (btn >= 0) {
-                if (e.getRepeatCount() == 0 && (down || up)) press(btn, down);
+                if (e.getRepeatCount() == 0 && (down || up)) press(player, btn, down);
                 return true;
             }
             return super.dispatchKeyEvent(e);
         }
 
-        // Library screen: controller A / remote OK = select, controller B / remote Back = back
+        // Library screen: ✕ / OK = select, ○ / Back = back, △ / ▢ / Menu = favourite
         if (code == KeyEvent.KEYCODE_BUTTON_A || code == KeyEvent.KEYCODE_DPAD_CENTER
                 || code == KeyEvent.KEYCODE_BUTTON_START) {
             web.dispatchKeyEvent(new KeyEvent(e.getAction(), KeyEvent.KEYCODE_ENTER));
@@ -211,8 +244,12 @@ public class MainActivity extends Activity {
             }
             return true;
         }
+        if (code == KeyEvent.KEYCODE_BUTTON_X || code == KeyEvent.KEYCODE_BUTTON_Y || code == KeyEvent.KEYCODE_MENU) {
+            if (up) js("window.canoeOptions&&canoeOptions()");
+            return true;
+        }
         if (code == KeyEvent.KEYCODE_BUTTON_L1 || code == KeyEvent.KEYCODE_BUTTON_R1) {
-            // jump a page in the library
+            // jump a few rows in the library
             web.dispatchKeyEvent(new KeyEvent(e.getAction(),
                     code == KeyEvent.KEYCODE_BUTTON_L1 ? KeyEvent.KEYCODE_PAGE_UP : KeyEvent.KEYCODE_PAGE_DOWN));
             return true;
@@ -241,8 +278,8 @@ public class MainActivity extends Activity {
             else if (hatX < -0.5f || lx < -0.6f) key = KeyEvent.KEYCODE_DPAD_LEFT;
             else if (hatY > 0.5f || ly > 0.6f) key = KeyEvent.KEYCODE_DPAD_DOWN;
             else if (hatY < -0.5f || ly < -0.6f) key = KeyEvent.KEYCODE_DPAD_UP;
-            if (key != lastAxis[0]) {
-                lastAxis[0] = key;
+            if (key != libraryAxisKey) {
+                libraryAxisKey = key;
                 if (key != -1) {
                     web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
                     web.dispatchKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
@@ -252,24 +289,28 @@ public class MainActivity extends Activity {
         }
         if (menuOpen) return true;
 
+        int p = playerFor(ev.getDevice());
         // D-pad from the hat (and from the left stick on systems without analog sticks)
         boolean useStickAsDpad = !analogCore;
-        sendDigital(UP, hatY < -0.5f || (useStickAsDpad && ly < -0.5f));
-        sendDigital(DOWN, hatY > 0.5f || (useStickAsDpad && ly > 0.5f));
-        sendDigital(LEFT, hatX < -0.5f || (useStickAsDpad && lx < -0.5f));
-        sendDigital(RIGHT, hatX > 0.5f || (useStickAsDpad && lx > 0.5f));
-        sendDigital(L2, lt > 0.5f);
-        sendDigital(R2, rt > 0.5f);
+        sendDigital(p, UP, hatY < -0.5f || (useStickAsDpad && ly < -0.5f));
+        sendDigital(p, DOWN, hatY > 0.5f || (useStickAsDpad && ly > 0.5f));
+        sendDigital(p, LEFT, hatX < -0.5f || (useStickAsDpad && lx < -0.5f));
+        sendDigital(p, RIGHT, hatX > 0.5f || (useStickAsDpad && lx > 0.5f));
 
         if (analogCore) {
-            sendAnalog(LS_RIGHT, lx > 0 ? lx : 0);
-            sendAnalog(LS_LEFT, lx < 0 ? -lx : 0);
-            sendAnalog(LS_DOWN, ly > 0 ? ly : 0);
-            sendAnalog(LS_UP, ly < 0 ? -ly : 0);
-            sendAnalog(RS_RIGHT, rx > 0 ? rx : 0);
-            sendAnalog(RS_LEFT, rx < 0 ? -rx : 0);
-            sendAnalog(RS_DOWN, ry > 0 ? ry : 0);
-            sendAnalog(RS_UP, ry < 0 ? -ry : 0);
+            sendDigital(p, L2, lt > 0.5f);
+            sendDigital(p, R2, rt > 0.5f);
+            sendAnalog(p, LS_RIGHT, lx > 0 ? lx : 0);
+            sendAnalog(p, LS_LEFT, lx < 0 ? -lx : 0);
+            sendAnalog(p, LS_DOWN, ly > 0 ? ly : 0);
+            sendAnalog(p, LS_UP, ly < 0 ? -ly : 0);
+            sendAnalog(p, RS_RIGHT, rx > 0 ? rx : 0);
+            sendAnalog(p, RS_LEFT, rx < 0 ? -rx : 0);
+            sendAnalog(p, RS_DOWN, ry > 0 ? ry : 0);
+            sendAnalog(p, RS_UP, ry < 0 ? -ry : 0);
+        } else {
+            setRewind(p, lt > 0.5f);
+            setFast(p, rt > 0.5f);
         }
         return true;
     }
@@ -287,55 +328,72 @@ public class MainActivity extends Activity {
         return new float[]{x / mag * scaled, y / mag * scaled};
     }
 
-    // separate memory for hat/stick-driven digital presses (slots 0..15 in lastAxis reused per button)
-    private final boolean[] axisPressed = new boolean[16];
-
-    private void sendDigital(int button, boolean pressed) {
-        if (axisPressed[button] != pressed) {
-            axisPressed[button] = pressed;
-            press(button, pressed);
+    private void sendDigital(int p, int button, boolean pressed) {
+        if (axisPressed[p][button] != pressed) {
+            axisPressed[p][button] = pressed;
+            press(p, button, pressed);
         }
     }
 
-    private void sendAnalog(int slot, float amount) {
+    private void sendAnalog(int p, int slot, float amount) {
         int v = Math.round(Math.min(1f, amount) * 32767);
-        if (Math.abs(v - lastAxis[slot]) > 600 || (v == 0 && lastAxis[slot] != 0)) {
-            lastAxis[slot] = v;
-            pressAnalog(slot, v);
+        if (Math.abs(v - lastAxis[p][slot]) > 600 || (v == 0 && lastAxis[p][slot] != 0)) {
+            lastAxis[p][slot] = v;
+            pressAnalog(p, slot, v);
         }
     }
 
     private void releaseAll() {
-        for (int b = 0; b < 16; b++) { press(b, false); axisPressed[b] = false; }
-        for (int a = LS_RIGHT; a <= RS_UP; a++) { pressAnalog(a, 0); lastAxis[a] = 0; }
+        for (int p = 0; p < MAX_PLAYERS; p++) {
+            for (int b = 0; b < 16; b++) { press(p, b, false); axisPressed[p][b] = false; }
+            for (int a = LS_RIGHT; a <= RS_UP; a++) { pressAnalog(p, a, 0); lastAxis[p][a] = 0; }
+            setFast(p, false);
+            setRewind(p, false);
+        }
+    }
+
+    private AlertDialog menuDialog(String title, String[] items, DialogInterface.OnClickListener onPick) {
+        AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(title)
+                .setItems(items, onPick)
+                .create();
+        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
+            @Override public void onDismiss(DialogInterface d) {
+                if (chainingMenu) { chainingMenu = false; return; } // another menu is opening
+                menuOpen = false;
+                js("window.canoePause && canoePause(false)");
+            }
+        });
+        return dialog;
     }
 
     private void showPauseMenu() {
         menuOpen = true;
         releaseAll();
         js("window.canoePause && canoePause(true)");
-        final String[] items = {"Resume", "Save game (quick save)", "Load quick save", "Picture: change look", "Restart game", "Quit to library"};
-        AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                .setTitle("Paused")
-                .setItems(items, new DialogInterface.OnClickListener() {
-                    @Override public void onClick(DialogInterface d, int which) {
-                        switch (which) {
-                            case 1: js("canoeQuickSave()"); break;
-                            case 2: js("canoeQuickLoad()"); break;
-                            case 3: js("canoeNextPicture()"); break;
-                            case 4: js("canoeRestart()"); break;
-                            case 5: js("canoeQuit()"); break;
-                            default: break;
-                        }
-                    }
-                })
-                .create();
-        dialog.setOnDismissListener(new DialogInterface.OnDismissListener() {
-            @Override public void onDismiss(DialogInterface d) {
-                menuOpen = false;
-                js("window.canoePause && canoePause(false)");
+        final String[] items = {"Resume", "Save game\u2026", "Load game\u2026", "Picture: change look",
+                "Restart game", "Quit to library"};
+        menuDialog("Paused", items, new DialogInterface.OnClickListener() {
+            @Override public void onClick(DialogInterface d, int which) {
+                switch (which) {
+                    case 1: chainingMenu = true; showSlotMenu(true); break;
+                    case 2: chainingMenu = true; showSlotMenu(false); break;
+                    case 3: js("canoeNextPicture()"); break;
+                    case 4: js("canoeRestart()"); break;
+                    case 5: js("canoeQuit()"); break;
+                    default: break;
+                }
             }
-        });
-        dialog.show();
+        }).show();
+    }
+
+    private void showSlotMenu(final boolean save) {
+        menuOpen = true;
+        final String[] slots = {"Slot 1", "Slot 2", "Slot 3"};
+        menuDialog(save ? "Save to which slot?" : "Load which slot?", slots, new DialogInterface.OnClickListener() {
+            @Override public void onClick(DialogInterface d, int which) {
+                js((save ? "canoeSaveSlot(" : "canoeLoadSlot(") + (which + 1) + ")");
+            }
+        }).show();
     }
 }

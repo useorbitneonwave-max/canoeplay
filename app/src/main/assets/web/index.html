@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanoePlay</title>
+<style>
+  :root { --bg: #0e1b30; --card: #16284a; --accent: #ffb74d; --blue: #1f8ef1; --text: #fff; --muted: #9fb3d1; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, Roboto, sans-serif; }
+  body { padding: 4vh 5vw 6vh; }
+  header { display: flex; align-items: baseline; gap: 18px; margin-bottom: 3vh; }
+  h1 { margin: 0; font-size: 44px; }
+  h1 span { color: var(--accent); }
+  #count { color: var(--muted); font-size: 22px; }
+  .hint { margin-left: auto; color: var(--muted); font-size: 18px; }
+  #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 28px; }
+  .tile { background: var(--card); border-radius: 16px; overflow: hidden; outline: none;
+          border: 4px solid transparent; transition: transform .12s, border-color .12s; }
+  .tile:focus { border-color: var(--accent); transform: scale(1.06); box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+  .art { aspect-ratio: 4 / 3; background: #0a1426; display: flex; align-items: center; justify-content: center;
+         position: relative; }
+  .art img { width: 100%; height: 100%; object-fit: contain; position: absolute; inset: 0; }
+  .ph { font-size: 64px; font-weight: 800; color: var(--blue); }
+  .meta { padding: 12px 14px 14px; }
+  .name { font-size: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sys { font-size: 15px; color: var(--muted); margin-top: 4px; }
+  .add .art { background: #12305a; }
+  .add .ph { color: var(--accent); font-size: 90px; }
+  #overlay { position: fixed; inset: 0; background: rgba(5,10,20,.92); display: none;
+             align-items: center; justify-content: center; z-index: 5; }
+  #overlay.show { display: flex; }
+  .panel { background: var(--card); border-radius: 22px; padding: 44px 56px; max-width: 900px; }
+  .panel h2 { margin: 0 0 20px; font-size: 36px; }
+  .panel ol { font-size: 24px; line-height: 1.6; padding-left: 28px; margin: 0 0 24px; }
+  .url { color: var(--accent); font-weight: 700; font-size: 30px; }
+  .panel p { color: var(--muted); font-size: 20px; margin: 10px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Canoe<span>Play</span></h1>
+  <div id="count"></div>
+  <div class="hint">OK / A to play &nbsp;·&nbsp; Back during a game for the menu</div>
+</header>
+<div id="grid"></div>
+
+<div id="overlay">
+  <div class="panel">
+    <h2>Add games</h2>
+    <ol>
+      <li>Connect your phone or computer to the same Wi-Fi as this TV.</li>
+      <li>Open a browser and go to:<br><span class="url" id="url"></span></li>
+      <li>Pick your ROM files and they'll show up here.</li>
+    </ol>
+    <p>Or put them in a folder called <b>ROMs</b> on a USB stick and plug it into the TV.</p>
+    <p>Press OK or Back to close.</p>
+  </div>
+</div>
+
+<script>
+  if (window.Canoe) Canoe.setInGame(false, '');
+  let games = [], idx = 0, overlay = false, info = {}, signature = '';
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  function thumb(g) {
+    return 'https://thumbnails.libretro.com/' + encodeURIComponent(g.thumbSystem) +
+           '/Named_Boxarts/' + encodeURIComponent(g.thumbName) + '.png';
+  }
+
+  async function load(keepFocus) {
+    try {
+      info = await (await fetch('/api/info')).json();
+      const list = await (await fetch('/api/games')).json();
+      const sig = list.map(g => g.id).join('|');
+      if (sig === signature && keepFocus) return;
+      signature = sig;
+      games = list;
+      render();
+      focusTile(keepFocus ? idx : (games.length ? 1 : 0));
+    } catch (e) {
+      setTimeout(() => load(keepFocus), 1000);
+    }
+  }
+  window.canoeReload = () => load(true);
+
+  function render() {
+    document.getElementById('count').textContent = games.length + (games.length === 1 ? ' game' : ' games');
+    const url = 'http://' + (info.ip || 'TV-IP') + ':' + (info.port || 8080) + '/upload';
+    document.getElementById('url').textContent = url;
+    let html = '<div class="tile add" tabindex="0"><div class="art"><span class="ph">+</span></div>' +
+               '<div class="meta"><div class="name">Add games</div><div class="sys">From your phone or a USB stick</div></div></div>';
+    for (const g of games) {
+      html += '<div class="tile" tabindex="0"><div class="art"><span class="ph">' + esc(g.title.charAt(0).toUpperCase()) +
+              '</span><img loading="lazy" src="' + thumb(g) + '" onerror="this.remove()"></div>' +
+              '<div class="meta"><div class="name">' + esc(g.title) + '</div><div class="sys">' + esc(g.system) + '</div></div></div>';
+    }
+    document.getElementById('grid').innerHTML = html;
+  }
+
+  function tiles() { return document.querySelectorAll('.tile'); }
+  function cols() {
+    const t = tiles();
+    if (t.length < 2) return 1;
+    const top = t[0].offsetTop;
+    let c = 0;
+    for (const x of t) { if (x.offsetTop === top) c++; else break; }
+    return c;
+  }
+  function focusTile(i) {
+    const t = tiles();
+    if (!t.length) return;
+    idx = Math.max(0, Math.min(t.length - 1, i));
+    t[idx].focus();
+    t[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+  function activate(i) {
+    if (i === 0) { showOverlay(true); return; }
+    const g = games[i - 1];
+    location.href = '/play?core=' + encodeURIComponent(g.core) + '&id=' + encodeURIComponent(g.id) +
+                    '&stem=' + encodeURIComponent(g.stem);
+  }
+  function showOverlay(on) {
+    overlay = on;
+    document.getElementById('overlay').classList.toggle('show', on);
+    if (!on) focusTile(idx);
+  }
+  window.canoeBack = function () {
+    if (overlay) { showOverlay(false); return true; }
+    return false;
+  };
+
+  document.addEventListener('keydown', e => {
+    if (overlay) {
+      if (e.key === 'Enter' || e.key === 'Escape') showOverlay(false);
+      e.preventDefault();
+      return;
+    }
+    const c = cols();
+    switch (e.key) {
+      case 'ArrowRight': focusTile(idx + 1); break;
+      case 'ArrowLeft': focusTile(idx - 1); break;
+      case 'ArrowDown': focusTile(idx + c); break;
+      case 'ArrowUp': focusTile(idx - c); break;
+      case 'PageDown': focusTile(idx + c * 3); break;
+      case 'PageUp': focusTile(idx - c * 3); break;
+      case 'Enter': activate(idx); break;
+      default: return;
+    }
+    e.preventDefault();
+  });
+  document.addEventListener('click', e => {
+    const t = e.target.closest('.tile');
+    if (t) activate([...tiles()].indexOf(t));
+  });
+
+  load(false);
+  // pick up games added from a phone while this screen is open
+  setInterval(() => load(true), 4000);
+</script>
+</body>
+</html>

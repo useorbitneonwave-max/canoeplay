@@ -1,0 +1,54 @@
+name: Build CanoePlay APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Restore signing key (keeps saves when updating)
+        env:
+          SIGNING_KEY_B64: ${{ secrets.SIGNING_KEY_B64 }}
+        run: |
+          if [ -n "$SIGNING_KEY_B64" ]; then
+            echo "$SIGNING_KEY_B64" | base64 -d > app/release.keystore
+            echo "Using release key"
+          else
+            echo "No SIGNING_KEY_B64 secret - using debug key"
+          fi
+
+      - name: Build APK
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/*.apk CanoePlay.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CanoePlay-apk
+          path: CanoePlay.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: CanoePlay build ${{ github.run_number }}
+          files: CanoePlay.apk
+          make_latest: true

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanoePlay – Add games</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Roboto, sans-serif; background: #0e1b30; color: #fff; padding: 22px; }
+  h1 { margin: 0 0 4px; font-size: 28px; } h1 span { color: #ffb74d; }
+  .sub { color: #9fb3d1; margin: 0 0 20px; }
+  label.pick { display: block; background: #1f8ef1; color: #fff; text-align: center; padding: 20px; border-radius: 14px;
+               font-size: 20px; font-weight: 700; cursor: pointer; }
+  input[type=file] { display: none; }
+  .types { color: #9fb3d1; font-size: 14px; margin: 10px 0 24px; }
+  .item { background: #16284a; border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; display: flex;
+          align-items: center; gap: 10px; }
+  .item .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .item .s { color: #9fb3d1; font-size: 13px; }
+  .bar { height: 6px; background: #0a1426; border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar i { display: block; height: 100%; width: 0; background: #ffb74d; }
+  .ok { color: #7ee08a; } .err { color: #ff8a80; }
+  button.del { background: none; border: 1px solid #ff8a80; color: #ff8a80; border-radius: 8px; padding: 6px 10px; }
+  h2 { font-size: 20px; margin: 28px 0 12px; }
+</style>
+</head>
+<body>
+  <h1>Canoe<span>Play</span></h1>
+  <p class="sub">Send games to your TV</p>
+  <label class="pick">Choose game files<input id="files" type="file" multiple></label>
+  <div class="types">SNES (.sfc .smc) · NES (.nes) · Game Boy (.gb .gbc) · GBA (.gba) · N64 (.z64 .n64 .v64) ·
+    Genesis (.md .gen) · Master System (.sms) · Game Gear (.gg) · DS (.nds) · or a .zip of any of these</div>
+  <div id="progress"></div>
+  <h2>On your TV</h2>
+  <div id="library"></div>
+
+<script>
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+  document.getElementById('files').addEventListener('change', async e => {
+    for (const f of e.target.files) await send(f);
+    e.target.value = '';
+    refresh();
+  });
+
+  function send(file) {
+    return new Promise(resolve => {
+      const row = document.createElement('div');
+      row.className = 'item';
+      row.innerHTML = '<div class="n">' + esc(file.name) + '<div class="bar"><i></i></div><div class="s">Sending…</div></div>';
+      document.getElementById('progress').prepend(row);
+      const bar = row.querySelector('i'), status = row.querySelector('.s');
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload');
+      xhr.upload.onprogress = ev => { if (ev.lengthComputable) bar.style.width = (ev.loaded / ev.total * 100) + '%'; };
+      xhr.onload = () => {
+        if (xhr.status === 200) { status.textContent = 'Added ✓'; status.className = 's ok'; bar.style.width = '100%'; }
+        else { status.textContent = xhr.responseText || 'Failed'; status.className = 's err'; }
+        resolve();
+      };
+      xhr.onerror = () => { status.textContent = 'Lost connection to the TV'; status.className = 's err'; resolve(); };
+      const fd = new FormData();
+      fd.append('rom', file, file.name);
+      xhr.send(fd);
+    });
+  }
+
+  async function refresh() {
+    const games = await (await fetch('/api/games')).json();
+    const box = document.getElementById('library');
+    if (!games.length) { box.innerHTML = '<p class="sub">No games yet.</p>'; return; }
+    box.innerHTML = games.map(g =>
+      '<div class="item"><div class="n">' + esc(g.title) + '<div class="s">' + esc(g.system) + '</div></div>' +
+      (g.removable ? '<button class="del" data-id="' + esc(g.id) + '">Remove</button>' : '<span class="s">USB</span>') +
+      '</div>').join('');
+  }
+
+  document.getElementById('library').addEventListener('click', async e => {
+    const b = e.target.closest('button.del');
+    if (!b || !confirm('Remove this game from the TV?')) return;
+    await fetch('/api/delete?id=' + encodeURIComponent(b.dataset.id), { method: 'POST' });
+    refresh();
+  });
+
+  refresh();
+</script>
+</body>
+</html>

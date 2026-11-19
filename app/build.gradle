@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.application'
+}
+
+def ks = file('release.keystore')
+
+android {
+    namespace 'com.canoe.play'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.canoe.play'
+        minSdk 21
+        // 29 keeps simple USB/storage access working on sideloaded TVs
+        targetSdk 29
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (ks.exists()) {
+                storeFile ks
+                storePassword 'canoeplay'
+                keyAlias 'canoeplay'
+                keyPassword 'canoeplay'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ks.exists() ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+}
+
+dependencies {
+    implementation 'org.nanohttpd:nanohttpd:2.3.1'
+}

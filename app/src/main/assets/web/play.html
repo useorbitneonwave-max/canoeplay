@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CanoePlay</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  #game { width: 100vw; height: 100vh; }
+  .ejs_virtualGamepad_parent { display: none !important; }
+  #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+             color: #fff; font: 600 28px system-ui, sans-serif; background: #0e1b30; z-index: 10; }
+</style>
+</head>
+<body>
+<div id="loading">Loading game…</div>
+<div id="game"></div>
+<script>
+  const p = new URLSearchParams(location.search);
+  const core = p.get('core');
+
+  window.EJS_player = '#game';
+  window.EJS_core = core;
+  window.EJS_gameUrl = '/rom/' + p.get('id');
+  window.EJS_gameName = p.get('stem') || 'game';
+  window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+  window.EJS_startOnLoaded = true;
+  window.EJS_color = '#1f8ef1';
+  window.EJS_defaultOptions = { 'virtual-gamepad': 'disabled' };
+  window.EJS_onGameStart = function () {
+    document.getElementById('loading').style.display = 'none';
+    if (window.Canoe) Canoe.setInGame(true, core);
+  };
+
+  function gm() { return window.EJS_emulator && EJS_emulator.gameManager; }
+
+  // Controller input sent from the Android side
+  window.canoeInput = function (button, value) {
+    try { gm().simulateInput(0, button, value); } catch (e) {}
+  };
+  window.canoeSave = function () {
+    try { gm().saveSaveFiles(); } catch (e) {}
+  };
+  window.canoePause = function (paused) {
+    try {
+      if (paused) { EJS_emulator.pause ? EJS_emulator.pause() : gm().toggleMainLoop(0); }
+      else { EJS_emulator.play ? EJS_emulator.play() : gm().toggleMainLoop(1); }
+    } catch (e) {
+      try { gm().toggleMainLoop(paused ? 0 : 1); } catch (e2) {}
+    }
+  };
+  window.canoeQuickSave = function () { try { gm().quickSave(); toast('Game saved'); } catch (e) { toast('Could not save'); } };
+  window.canoeQuickLoad = function () { try { gm().quickLoad(); toast('Save loaded'); } catch (e) { toast('No save found'); } };
+  window.canoeRestart = function () { try { gm().restart(); } catch (e) {} };
+  window.canoeQuit = function () {
+    canoeSave();
+    setTimeout(function () { location.href = '/'; }, 400);
+  };
+  // Back pressed before the game has finished loading
+  window.canoeBack = function () { location.href = '/'; return true; };
+
+  // In-game battery saves are also written every 30 seconds
+  setInterval(canoeSave, 30000);
+
+  function toast(msg) {
+    const t = document.createElement('div');
+    t.textContent = msg;
+    t.style.cssText = 'position:fixed;left:50%;bottom:8%;transform:translateX(-50%);background:rgba(0,0,0,.8);' +
+      'color:#fff;padding:14px 28px;border-radius:12px;font:600 24px system-ui,sans-serif;z-index:20';
+    document.body.appendChild(t);
+    setTimeout(function () { t.remove(); }, 1800);
+  }
+</script>
+<script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
+</body>
+</html>

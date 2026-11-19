@@ -13,7 +13,7 @@
 </style>
 </head>
 <body>
-<div id="loading">Loading game…</div>
+<div id="loading">Loading game…<br><small style="font-size:16px;font-weight:400;opacity:.7">The first time you play a system it downloads once, then works offline.</small></div>
 <div id="game"></div>
 <script>
   const p = new URLSearchParams(location.search);
@@ -23,7 +23,8 @@
   window.EJS_core = core;
   window.EJS_gameUrl = '/rom/' + p.get('id');
   window.EJS_gameName = p.get('stem') || 'game';
-  window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+  // served by the app itself: downloaded once per system, then works offline
+  window.EJS_pathtodata = '/ejs/';
   window.EJS_startOnLoaded = true;
   window.EJS_color = '#1f8ef1';
   // Picture filters. Smooth is the default so games don't look blocky on a big TV.
@@ -108,6 +109,6 @@
     setTimeout(function () { t.remove(); }, 1800);
   }
 </script>
-<script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
+<script src="/ejs/loader.js"></script>
 </body>
 </html>

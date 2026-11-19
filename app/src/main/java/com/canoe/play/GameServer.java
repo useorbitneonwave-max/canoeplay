@@ -31,12 +31,14 @@ public class GameServer extends NanoHTTPD {
     private final AssetManager assets;
     private final RomLibrary library;
     private final ArtFinder art;
+    private final EjsCache ejs;
 
     GameServer(Context ctx, int port, RomLibrary library) {
         super(port);
         this.assets = ctx.getAssets();
         this.library = library;
         this.art = new ArtFinder(ctx);
+        this.ejs = new EjsCache(ctx);
     }
 
     @Override
@@ -56,6 +58,7 @@ public class GameServer extends NanoHTTPD {
             }
             if (uri.startsWith("/rom/")) return rom(uri.substring("/rom/".length()));
             if (uri.equals("/api/art")) return art(session);
+            if (uri.startsWith("/ejs/")) return emulatorFile(uri.substring("/ejs/".length()));
             if (uri.equals("/api/upload") && session.getMethod() == Method.POST) return upload(session);
             if (uri.equals("/api/delete") && session.getMethod() == Method.POST) return delete(session);
             return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Not found");
@@ -87,6 +90,17 @@ public class GameServer extends NanoHTTPD {
         if (f == null) return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "Game not found");
         Response r = newFixedLengthResponse(Response.Status.OK, "application/octet-stream",
                 new FileInputStream(f), f.length());
+        r.addHeader("Access-Control-Allow-Origin", "*");
+        return r;
+    }
+
+    private Response emulatorFile(String path) throws IOException {
+        File f = ejs.get(path);
+        if (f == null) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT,
+                    "Emulator file not available offline yet: " + path);
+        }
+        Response r = newFixedLengthResponse(Response.Status.OK, mimeFor(path), new FileInputStream(f), f.length());
         r.addHeader("Access-Control-Allow-Origin", "*");
         return r;
     }
@@ -166,6 +180,8 @@ public class GameServer extends NanoHTTPD {
         if (path.endsWith(".css")) return "text/css";
         if (path.endsWith(".png")) return "image/png";
         if (path.endsWith(".svg")) return "image/svg+xml";
+        if (path.endsWith(".wasm")) return "application/wasm";
+        if (path.endsWith(".json")) return "application/json";
         return "application/octet-stream";
     }
 

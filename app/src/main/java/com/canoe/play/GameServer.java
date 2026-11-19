@@ -92,7 +92,12 @@ public class GameServer extends NanoHTTPD {
         Map<String, String> files = new HashMap<>();
         session.parseBody(files);
         String tmp = files.get("rom");
-        List<String> names = session.getParameters().get("rom");
+        // The page sends the real file name in the address (?name=...), because the
+        // multipart parser cuts names off at an apostrophe, e.g. "Diddy's Kong Quest".
+        List<String> names = session.getParameters().get("name");
+        if (names == null || names.isEmpty() || names.get(0).trim().isEmpty()) {
+            names = session.getParameters().get("rom");
+        }
         if (tmp == null || names == null || names.isEmpty()) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "No file received");
         }

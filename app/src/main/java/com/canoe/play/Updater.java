@@ -103,7 +103,6 @@ public class Updater {
                 if (!quiet) status("checking", "", 0);
                 try {
                     HttpURLConnection c = open(LATEST);
-                    c.setRequestProperty("Accept", "application/vnd.github+json");
                     JSONObject rel = new JSONObject(readAll(c.getInputStream()));
                     c.disconnect();
                     String tag = rel.getString("tag_name");
@@ -119,7 +118,7 @@ public class Updater {
                     if (url != null && build > installedBuild()) status("available", tag, 0);
                     else if (!quiet) status("current", installedVersion(), 0);
                 } catch (Exception e) {
-                    if (!quiet) status("error", "Couldn't reach GitHub. Check the internet connection.", 0);
+                    if (!quiet) status("error", "Couldn't check for updates (" + e + ")", 0);
                 }
             }
         }).start();
@@ -197,7 +196,9 @@ public class Updater {
         // follow GitHub's redirects to its download servers by hand (always https)
         for (int i = 0; i < 5; i++) {
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            // all headers must be set before the request is sent
             c.setRequestProperty("User-Agent", "CanoePlay");
+            c.setRequestProperty("Accept", "application/vnd.github+json, application/octet-stream, */*");
             c.setConnectTimeout(15000);
             c.setReadTimeout(30000);
             c.setInstanceFollowRedirects(false);

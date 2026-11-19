@@ -13,8 +13,8 @@ android {
         minSdk 21
         // 29 keeps simple USB/storage access working on sideloaded TVs
         targetSdk 29
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1'
     }
 
     signingConfigs {

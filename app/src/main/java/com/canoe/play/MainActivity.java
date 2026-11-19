@@ -214,10 +214,9 @@ public class MainActivity extends Activity {
 
         float hatX = ev.getAxisValue(MotionEvent.AXIS_HAT_X);
         float hatY = ev.getAxisValue(MotionEvent.AXIS_HAT_Y);
-        float lx = deadzone(ev.getAxisValue(MotionEvent.AXIS_X));
-        float ly = deadzone(ev.getAxisValue(MotionEvent.AXIS_Y));
-        float rx = deadzone(ev.getAxisValue(MotionEvent.AXIS_Z));
-        float ry = deadzone(ev.getAxisValue(MotionEvent.AXIS_RZ));
+        float[] left = deadzone(ev.getAxisValue(MotionEvent.AXIS_X), ev.getAxisValue(MotionEvent.AXIS_Y));
+        float[] right = deadzone(ev.getAxisValue(MotionEvent.AXIS_Z), ev.getAxisValue(MotionEvent.AXIS_RZ));
+        float lx = left[0], ly = left[1], rx = right[0], ry = right[1];
         float lt = Math.max(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE));
         float rt = Math.max(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(MotionEvent.AXIS_GAS));
 
@@ -261,8 +260,17 @@ public class MainActivity extends Activity {
         return true;
     }
 
-    private static float deadzone(float v) {
-        return Math.abs(v) < 0.2f ? 0f : v;
+    /**
+     * Ignores small stick movement so a worn (drifting) stick doesn't move on its own.
+     * Uses a round dead zone and rescales the rest so full tilt still reaches 100%.
+     */
+    static final float DEADZONE = 0.30f;
+
+    private static float[] deadzone(float x, float y) {
+        float mag = (float) Math.sqrt(x * x + y * y);
+        if (mag < DEADZONE) return new float[]{0f, 0f};
+        float scaled = Math.min(1f, (mag - DEADZONE) / (1f - DEADZONE));
+        return new float[]{x / mag * scaled, y / mag * scaled};
     }
 
     // separate memory for hat/stick-driven digital presses (slots 0..15 in lastAxis reused per button)

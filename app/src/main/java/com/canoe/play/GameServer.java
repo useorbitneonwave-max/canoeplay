@@ -111,12 +111,15 @@ public class GameServer extends NanoHTTPD {
         if (sys == null || stem == null || sys.isEmpty() || stem.isEmpty()) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "Missing");
         }
-        String url = art.find(sys.get(0), stem.get(0));
-        if (url == null) return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "No cover");
-        Response r = newFixedLengthResponse(Response.Status.REDIRECT_SEE_OTHER, MIME_PLAINTEXT, "");
-        r.addHeader("Location", url);
-        r.addHeader("Cache-Control", "max-age=86400");
-        return r;
+        File f = art.thumb(sys.get(0), stem.get(0));
+        if (f == null) return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "No cover");
+        try {
+            Response r = newFixedLengthResponse(Response.Status.OK, "image/jpeg", new FileInputStream(f), f.length());
+            r.addHeader("Cache-Control", "max-age=604800");
+            return r;
+        } catch (IOException e) {
+            return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "No cover");
+        }
     }
 
     private Response upload(IHTTPSession session) throws Exception {

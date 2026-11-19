@@ -1,6 +1,8 @@
 package com.canoe.play;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -18,6 +20,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.security.MessageDigest;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,13 +39,21 @@ public class ArtFinder {
     private static final long MAX_AGE = 14L * 24 * 60 * 60 * 1000;
 
     private final File dir;
+    private final File thumbs;
+    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
     private final Map<String, List<String>> lists = new HashMap<>();
+    // normalised name -> real cover names, built once per system for instant lookups
+    private final Map<String, Map<String, List<String>>> indexes = new HashMap<>();
     private final Map<String, String> matches = new HashMap<>();
 
     ArtFinder(Context ctx) {
         dir = new File(ctx.getCacheDir(), "art");
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
+        // small copies of covers, kept so the library loads fast and works offline
+        thumbs = new File(ctx.getFilesDir(), "covers");
+        //noinspection ResultOfMethodCallIgnored
+        thumbs.mkdirs();
     }
 
     /** Full image URL for this game, or null if there's no cover. */
@@ -53,11 +67,103 @@ public class ArtFinder {
         if (names == null) {
             name = stem.replaceAll("[&*/:`<>?\\\\|\"]", "_"); // offline guess
         } else {
-            name = best(names, stem);
+            name = best(index(system, names), names, stem);
         }
         String url = name == null ? null : BASE + enc(system) + "/Named_Boxarts/" + enc(name) + ".png";
         if (names != null) synchronized (matches) { matches.put(key, url); }
         return url;
+    }
+
+    private synchronized Map<String, List<String>> index(String system, List<String> names) {
+        Map<String, List<String>> idx = indexes.get(system);
+        if (idx != null) return idx;
+        idx = new HashMap<>();
+        for (String n : names) {
+            String k = norm(n);
+            List<String> l = idx.get(k);
+            if (l == null) { l = new ArrayList<>(); idx.put(k, l); }
+            l.add(n);
+        }
+        indexes.put(system, idx);
+        return idx;
+    }
+
+    /**
+     * A small JPEG of the cover (about 400 px wide) stored on the device, or null if
+     * this game has no cover. Downloads and shrinks it the first time only.
+     */
+    File thumb(String system, String stem) {
+        String key = sha1(system + "|" + stem);
+        File jpg = new File(thumbs, key + ".jpg");
+        File none = new File(thumbs, key + ".none");
+        if (jpg.isFile()) return jpg;
+        if (none.isFile() && System.currentTimeMillis() - none.lastModified() < MAX_AGE) return null;
+        Object lock = locks.putIfAbsent(key, new Object());
+        if (lock == null) lock = locks.get(key);
+        synchronized (lock) {
+            if (jpg.isFile()) return jpg;
+            String url = find(system, stem);
+            if (url == null) { touch(none); return null; }
+            try {
+                byte[] data = download(url);
+                if (data == null) { touch(none); return null; }
+                BitmapFactory.Options o = new BitmapFactory.Options();
+                o.inJustDecodeBounds = true;
+                BitmapFactory.decodeByteArray(data, 0, data.length, o);
+                int sample = 1;
+                while (o.outWidth / (sample * 2) >= 400) sample *= 2;
+                BitmapFactory.Options o2 = new BitmapFactory.Options();
+                o2.inSampleSize = sample;
+                Bitmap b = BitmapFactory.decodeByteArray(data, 0, data.length, o2);
+                if (b == null) { touch(none); return null; }
+                if (b.getWidth() > 420) {
+                    Bitmap s = Bitmap.createScaledBitmap(b, 400, Math.max(1, b.getHeight() * 400 / b.getWidth()), true);
+                    b.recycle();
+                    b = s;
+                }
+                File tmp = new File(thumbs, key + ".tmp");
+                FileOutputStream out = new FileOutputStream(tmp);
+                b.compress(Bitmap.CompressFormat.JPEG, 85, out);
+                out.close();
+                b.recycle();
+                //noinspection ResultOfMethodCallIgnored
+                tmp.renameTo(jpg);
+                return jpg.isFile() ? jpg : null;
+            } catch (Exception e) {
+                return null; // network hiccup: try again next time
+            }
+        }
+    }
+
+    private static byte[] download(String url) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+        c.setRequestProperty("User-Agent", "CanoePlay");
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(30000);
+        if (c.getResponseCode() != 200) { c.disconnect(); return null; }
+        InputStream in = c.getInputStream();
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        byte[] buf = new byte[32 * 1024];
+        int n;
+        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+        in.close();
+        c.disconnect();
+        return b.toByteArray();
+    }
+
+    private static void touch(File f) {
+        try { new FileOutputStream(f).close(); } catch (Exception ignored) {}
+    }
+
+    private static String sha1(String s) {
+        try {
+            byte[] d = MessageDigest.getInstance("SHA-1").digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte x : d) sb.append(String.format(Locale.US, "%02x", x));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
+        }
     }
 
     private synchronized List<String> list(String system) {
@@ -145,9 +251,16 @@ public class ArtFinder {
         return "usa";
     }
 
-    static String best(List<String> names, String stem) {
+    static String best(Map<String, List<String>> idx, List<String> names, String stem) {
         String want = norm(stem);
         if (want.isEmpty()) return null;
+        // fast path: exact title match from the index
+        List<String> exact = idx.get(want);
+        if (exact != null) return pick(exact, want, stem);
+        return pick(names, want, stem); // slower fuzzy search, only for odd names
+    }
+
+    private static String pick(List<String> names, String want, String stem) {
         String hint = regionHint(stem);
         String bestName = null;
         int bestScore = Integer.MIN_VALUE;

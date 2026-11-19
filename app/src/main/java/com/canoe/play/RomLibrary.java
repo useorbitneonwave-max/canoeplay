@@ -93,6 +93,10 @@ public class RomLibrary {
     }
 
     private final File internalDir;
+    // detection results keyed by path+size+date, so zips are only opened once
+    private final java.util.Map<String, Sys> detectCache = new java.util.HashMap<>();
+    private String lastSignature = null;
+    private JSONArray lastList = null;
 
     RomLibrary(Context ctx) {
         internalDir = new File(ctx.getFilesDir(), "roms");
@@ -165,11 +169,47 @@ public class RomLibrary {
         return null;
     }
 
-    JSONArray list() {
+    /** Cheap: lists files only. The expensive part (opening zips) is cached per file. */
+    synchronized JSONArray list() {
+        List<File> files = new ArrayList<>();
+        File[] internal0 = internalDir.listFiles();
+        if (internal0 != null) for (File f : internal0) files.add(f);
+        List<File> ext = new ArrayList<>();
+        for (File root : externalRoots()) collect(root, ext, 0);
+        files.addAll(ext);
+        StringBuilder sig = new StringBuilder();
+        for (File f : files) sig.append(f.getPath()).append('|').append(f.length()).append('|').append(f.lastModified()).append('\n');
+        String signature = sig.toString();
+        if (signature.equals(lastSignature) && lastList != null) return lastList;
+        lastSignature = signature;
+        lastList = buildList();
+        return lastList;
+    }
+
+    private static void collect(File dir, List<File> out, int depth) {
+        if (depth > 3) return;
+        File[] kids = dir.listFiles();
+        if (kids == null) return;
+        for (File k : kids) {
+            if (k.getName().startsWith(".")) continue;
+            if (k.isDirectory()) collect(k, out, depth + 1);
+            else if (acceptable(k.getName())) out.add(k);
+        }
+    }
+
+    private Sys detectCached(File f) {
+        String key = f.getPath() + "|" + f.length() + "|" + f.lastModified();
+        if (detectCache.containsKey(key)) return detectCache.get(key);
+        Sys s = detect(f);
+        detectCache.put(key, s);
+        return s;
+    }
+
+    private JSONArray buildList() {
         List<JSONObject> games = new ArrayList<>();
         File[] internal = internalDir.listFiles();
         if (internal != null) {
-            for (File f : internal) add(games, f, idFor("i", f.getName()), true);
+            for (File f : internal) add(games, f, idFor("i", f.getName()), true, detectCached(f));
         }
         for (File root : externalRoots()) walk(root, games, 0);
 
@@ -185,6 +225,7 @@ public class RomLibrary {
     }
 
     private void walk(File dir, List<JSONObject> out, int depth) {
+        // (instance method so it can use the detection cache)
         if (depth > 3) return;
         File[] kids = dir.listFiles();
         if (kids == null) return;
@@ -193,15 +234,14 @@ public class RomLibrary {
             if (k.isDirectory()) walk(k, out, depth + 1);
             else {
                 try {
-                    add(out, k, idFor("e", k.getCanonicalPath()), false);
+                    add(out, k, idFor("e", k.getCanonicalPath()), false, detectCached(k));
                 } catch (IOException ignored) {}
             }
         }
     }
 
-    private static void add(List<JSONObject> out, File f, String id, boolean removable) {
+    private static void add(List<JSONObject> out, File f, String id, boolean removable, Sys s) {
         if (!f.isFile() || !acceptable(f.getName())) return;
-        Sys s = detect(f);
         if (s == null) return;
         try {
             String stem = stem(f.getName());

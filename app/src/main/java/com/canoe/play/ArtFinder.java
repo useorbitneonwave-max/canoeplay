@@ -105,7 +105,7 @@ public class ArtFinder {
             String url = find(system, stem);
             if (url == null) { touch(none); return null; }
             try {
-                byte[] data = download(url);
+                byte[] data = downloadBytes(url);
                 if (data == null) { touch(none); return null; }
                 BitmapFactory.Options o = new BitmapFactory.Options();
                 o.inJustDecodeBounds = true;
@@ -135,7 +135,7 @@ public class ArtFinder {
         }
     }
 
-    private static byte[] download(String url) throws Exception {
+    private static byte[] downloadBytes(String url) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
         c.setRequestProperty("User-Agent", "CanoePlay");
         c.setConnectTimeout(15000);

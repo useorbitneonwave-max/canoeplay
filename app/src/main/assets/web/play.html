@@ -26,7 +26,15 @@
   window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
   window.EJS_startOnLoaded = true;
   window.EJS_color = '#1f8ef1';
-  window.EJS_defaultOptions = { 'virtual-gamepad': 'disabled' };
+  // Picture filters. Smooth is the default so games don't look blocky on a big TV.
+  const PICTURES = [
+    ['4xScaleHQ.glslp', 'Smooth'],
+    ['crt-easymode.glslp', 'Retro TV (scanlines)'],
+    ['disabled', 'Sharp pixels (original)']
+  ];
+  let picture = PICTURES[0][0];
+  try { picture = localStorage.getItem('canoePicture') || picture; } catch (e) {}
+  window.EJS_defaultOptions = { 'virtual-gamepad': 'disabled', 'shader': picture };
   window.EJS_onGameStart = function () {
     document.getElementById('loading').style.display = 'none';
     if (window.Canoe) Canoe.setInGame(true, core);
@@ -55,6 +63,15 @@
   window.canoeQuit = function () {
     canoeSave();
     setTimeout(function () { location.href = '/'; }, 400);
+  };
+  window.canoeNextPicture = function () {
+    let i = PICTURES.findIndex(p => p[0] === picture);
+    const next = PICTURES[(i + 1) % PICTURES.length];
+    picture = next[0];
+    try { localStorage.setItem('canoePicture', picture); } catch (e) {}
+    try { EJS_emulator.changeSettingOption('shader', picture); }
+    catch (e) { toast('Picture: ' + next[1] + ' (applies next game)'); return; }
+    toast('Picture: ' + next[1]);
   };
   // Back pressed before the game has finished loading
   window.canoeBack = function () { location.href = '/'; return true; };

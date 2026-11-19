@@ -314,7 +314,7 @@ public class MainActivity extends Activity {
         menuOpen = true;
         releaseAll();
         js("window.canoePause && canoePause(true)");
-        final String[] items = {"Resume", "Save game (quick save)", "Load quick save", "Restart game", "Quit to library"};
+        final String[] items = {"Resume", "Save game (quick save)", "Load quick save", "Picture: change look", "Restart game", "Quit to library"};
         AlertDialog dialog = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
                 .setTitle("Paused")
                 .setItems(items, new DialogInterface.OnClickListener() {
@@ -322,8 +322,9 @@ public class MainActivity extends Activity {
                         switch (which) {
                             case 1: js("canoeQuickSave()"); break;
                             case 2: js("canoeQuickLoad()"); break;
-                            case 3: js("canoeRestart()"); break;
-                            case 4: js("canoeQuit()"); break;
+                            case 3: js("canoeNextPicture()"); break;
+                            case 4: js("canoeRestart()"); break;
+                            case 5: js("canoeQuit()"); break;
                             default: break;
                         }
                     }

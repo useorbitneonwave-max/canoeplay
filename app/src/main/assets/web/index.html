@@ -35,6 +35,12 @@
   .panel ol { font-size: 24px; line-height: 1.6; padding-left: 28px; margin: 0 0 24px; }
   .url { color: var(--accent); font-weight: 700; font-size: 30px; }
   .panel p { color: var(--muted); font-size: 20px; margin: 10px 0 0; }
+  .panel .big { color: var(--text); font-size: 26px; line-height: 1.5; }
+  .pbar { height: 14px; background: #0a1426; border-radius: 7px; overflow: hidden; margin-top: 18px; }
+  .pbar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+  .upd .ph { color: #7ee08a; font-size: 70px; }
+  .upd.new { border-color: #7ee08a; }
+  .upd.new .sys { color: #7ee08a; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -46,7 +52,7 @@
 <div id="grid"></div>
 
 <div id="overlay">
-  <div class="panel">
+  <div class="panel" id="addPanel">
     <h2>Add games</h2>
     <ol>
       <li>Connect your phone or computer to the same Wi-Fi as this TV.</li>
@@ -56,11 +62,19 @@
     <p>Or put them in a folder called <b>ROMs</b> on a USB stick and plug it into the TV.</p>
     <p>Press OK or Back to close.</p>
   </div>
+  <div class="panel" id="updPanel" style="display:none">
+    <h2>Updates</h2>
+    <div class="big" id="updMsg"></div>
+    <div class="pbar" id="updBar" style="display:none"><i></i></div>
+    <p id="updHint"></p>
+  </div>
 </div>
 
 <script>
   if (window.Canoe) Canoe.setInGame(false, '');
+  const FIXED = 2; // Add games + Check for updates tiles
   let games = [], idx = 0, overlay = false, info = {}, signature = '';
+  let updateReady = false, panelAction = null, panel = '';
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -78,7 +92,7 @@
       signature = sig;
       games = list;
       render();
-      focusTile(keepFocus ? idx : (games.length ? 1 : 0));
+      focusTile(keepFocus ? idx : (games.length ? FIXED : 0));
     } catch (e) {
       setTimeout(() => load(keepFocus), 1000);
     }
@@ -90,7 +104,10 @@
     const url = 'http://' + (info.ip || 'TV-IP') + ':' + (info.port || 8080) + '/upload';
     document.getElementById('url').textContent = url;
     let html = '<div class="tile add" tabindex="0"><div class="art"><span class="ph">+</span></div>' +
-               '<div class="meta"><div class="name">Add games</div><div class="sys">From your phone or a USB stick</div></div></div>';
+               '<div class="meta"><div class="name">Add games</div><div class="sys">From your phone or a USB stick</div></div></div>' +
+               '<div class="tile upd' + (updateReady ? ' new' : '') + '" tabindex="0"><div class="art"><span class="ph">&#8635;</span></div>' +
+               '<div class="meta"><div class="name">Check for updates</div><div class="sys">' +
+               (updateReady ? 'Update available!' : 'Version ' + esc(appVersion())) + '</div></div></div>';
     for (const g of games) {
       html += '<div class="tile" tabindex="0"><div class="art"><span class="ph">' + esc(g.title.charAt(0).toUpperCase()) +
               '</span><img loading="lazy" src="' + thumb(g) + '" onerror="this.remove()"></div>' +
@@ -116,13 +133,21 @@
     t[idx].scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
   function activate(i) {
-    if (i === 0) { showOverlay(true); return; }
-    const g = games[i - 1];
+    if (i === 0) { showOverlay(true, 'add'); return; }
+    if (i === 1) { showOverlay(true, 'upd'); canoeUpdateStatus('checking', '', 0); if (window.Canoe) Canoe.checkForUpdate(false); return; }
+    const g = games[i - FIXED];
     location.href = '/play?core=' + encodeURIComponent(g.core) + '&id=' + encodeURIComponent(g.id) +
                     '&stem=' + encodeURIComponent(g.stem);
   }
-  function showOverlay(on) {
+  function showOverlay(on, which) {
     overlay = on;
+    panel = on ? which : '';
+    if (on) {
+      document.getElementById('addPanel').style.display = which === 'add' ? '' : 'none';
+      document.getElementById('updPanel').style.display = which === 'upd' ? '' : 'none';
+    } else {
+      panelAction = null;
+    }
     document.getElementById('overlay').classList.toggle('show', on);
     if (!on) focusTile(idx);
   }
@@ -133,7 +158,8 @@
 
   document.addEventListener('keydown', e => {
     if (overlay) {
-      if (e.key === 'Enter' || e.key === 'Escape') showOverlay(false);
+      if (e.key === 'Enter' && panelAction) panelAction();
+      else if (e.key === 'Enter' || e.key === 'Escape') showOverlay(false);
       e.preventDefault();
       return;
     }
@@ -155,7 +181,55 @@
     if (t) activate([...tiles()].indexOf(t));
   });
 
+  function appVersion() {
+    try { return window.Canoe ? Canoe.appVersion() : ''; } catch (e) { return ''; }
+  }
+
+  // Called by the app while checking / downloading / installing an update
+  window.canoeUpdateStatus = function (state, detail, pct) {
+    if (state !== 'available' && panel !== 'upd') return;
+    if (state === 'available') {
+      if (!updateReady) { updateReady = true; render(); focusTile(idx); }
+      if (panel !== 'upd') return; // quiet startup check: just light up the tile
+    }
+    const msg = document.getElementById('updMsg'), hint = document.getElementById('updHint');
+    const bar = document.getElementById('updBar');
+    bar.style.display = 'none';
+    panelAction = null;
+    hint.textContent = 'Press Back to close.';
+    switch (state) {
+      case 'checking': msg.textContent = 'Checking for updates…'; break;
+      case 'current': msg.textContent = 'You have the newest version (' + detail + ').'; hint.textContent = 'Press OK or Back to close.'; break;
+      case 'available':
+        msg.textContent = 'A new version (' + detail.replace(/^v/, '') + ') is ready.';
+        hint.textContent = 'Press OK to download and install it. Your games and saves are kept.';
+        panelAction = () => { if (window.Canoe) Canoe.installUpdate(); };
+        break;
+      case 'downloading':
+        msg.textContent = 'Downloading update… ' + pct + '%';
+        bar.style.display = ''; bar.firstElementChild.style.width = pct + '%';
+        hint.textContent = '';
+        break;
+      case 'installing':
+        msg.textContent = 'Almost done: choose Install on the screen that appears.';
+        hint.textContent = 'CanoePlay will close and reopen as the new version.';
+        break;
+      case 'permission':
+        msg.textContent = 'One-time setup: turn on the switch to let CanoePlay install updates, then come back here.';
+        hint.textContent = 'Then press OK to continue the update.';
+        panelAction = () => { if (window.Canoe) Canoe.installUpdate(); };
+        break;
+      case 'done': msg.textContent = 'Updated!'; break;
+      default:
+        msg.textContent = detail || 'Something went wrong.';
+        hint.textContent = 'Press OK to try again, or Back to close.';
+        panelAction = () => { canoeUpdateStatus('checking', '', 0); if (window.Canoe) Canoe.checkForUpdate(false); };
+    }
+  };
+
   load(false);
+  // quietly check once at launch so the tile can say "Update available"
+  setTimeout(() => { if (window.Canoe) Canoe.checkForUpdate(true); }, 1500);
   // pick up games added from a phone while this screen is open
   setInterval(() => load(true), 4000);
 </script>

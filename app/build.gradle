@@ -13,8 +13,10 @@ android {
         minSdk 21
         // 29 keeps simple USB/storage access working on sideloaded TVs
         targetSdk 29
-        versionCode 2
-        versionName '1.1'
+        // build number comes from GitHub Actions so "Check for updates" can compare versions
+        def build = (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+        versionCode build
+        versionName "1.0.${build}"
     }
 
     signingConfigs {

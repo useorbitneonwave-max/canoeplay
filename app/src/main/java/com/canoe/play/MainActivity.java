@@ -37,6 +37,7 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private GameServer server;
+    private Updater updater;
     private volatile boolean inGame = false;
     private volatile boolean analogCore = false;
     private boolean menuOpen = false;
@@ -86,6 +87,7 @@ public class MainActivity extends Activity {
         web.setFocusable(true);
         web.setFocusableInTouchMode(true);
         setContentView(web);
+        updater = new Updater(this, web);
         web.requestFocus();
         web.loadUrl(HOME);
 
@@ -109,6 +111,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         if (server != null) server.stop();
+        if (updater != null) updater.release();
         if (web != null) web.destroy();
         super.onDestroy();
     }
@@ -120,6 +123,17 @@ public class MainActivity extends Activity {
             analogCore = "n64".equals(core) || "nds".equals(core);
             inGame = playing;
         }
+
+        @JavascriptInterface
+        public void checkForUpdate(boolean quiet) { updater.check(quiet); }
+
+        @JavascriptInterface
+        public void installUpdate() {
+            runOnUiThread(new Runnable() { @Override public void run() { updater.install(); } });
+        }
+
+        @JavascriptInterface
+        public String appVersion() { return updater.installedVersion(); }
     }
 
     private void js(String code) {

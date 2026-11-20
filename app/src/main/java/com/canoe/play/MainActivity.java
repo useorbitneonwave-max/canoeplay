@@ -131,7 +131,10 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setInGame(boolean playing, String core) {
             analogCore = "n64".equals(core) || "nds".equals(core);
-            if (playing) activeMap = loadMapping(core);
+            if (playing) {
+                activeMap = loadMapping(core);
+                runOnUiThread(new Runnable() { @Override public void run() { playerOrder.clear(); } });
+            }
             inGame = playing;
         }
 
@@ -182,11 +185,28 @@ public class MainActivity extends Activity {
         js("window.canoeInput&&canoeInput(" + player + "," + slot + "," + value + ")");
     }
 
-    /** Controller 1 = player 1, controller 2 = player 2 ... The TV remote counts as player 1. */
-    private static int playerFor(InputDevice dev) {
+    // game controllers in the order they were first used in this game
+    private final java.util.ArrayList<Integer> playerOrder = new java.util.ArrayList<>();
+
+    /**
+     * The first controller you press in a game is player 1, the next one player 2, and so on.
+     * (Android's own controller numbers can't be trusted: on the Shield the remote can take
+     * number 1, which made a PS5 controller player 2.) The TV remote always counts as player 1.
+     */
+    private int playerFor(InputDevice dev) {
         if (dev == null) return 0;
-        int n = dev.getControllerNumber();
-        return n <= 0 ? 0 : Math.min(MAX_PLAYERS - 1, n - 1);
+        int src = dev.getSources();
+        boolean pad = (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+        if (!pad) return 0;
+        int id = dev.getId();
+        int i = playerOrder.indexOf(id);
+        if (i < 0) {
+            if (playerOrder.size() >= MAX_PLAYERS) return 0;
+            playerOrder.add(id);
+            i = playerOrder.size() - 1;
+        }
+        return i;
     }
 
     private android.content.SharedPreferences prefs() {

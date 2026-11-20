@@ -49,6 +49,10 @@ public class MainActivity extends Activity {
     private final boolean[] fastOn = new boolean[MAX_PLAYERS];
     private final boolean[] rewindOn = new boolean[MAX_PLAYERS];
     private int libraryAxisKey = -1;
+    // controller layout for the game being played: Android key code -> emulator button
+    private volatile android.util.SparseIntArray activeMap = new android.util.SparseIntArray();
+    private volatile boolean capturing = false;
+    private int captureDown = -1; // only count a button pressed after the Controls screen asked
     private boolean chainingMenu = false;
 
     @Override
@@ -127,8 +131,32 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void setInGame(boolean playing, String core) {
             analogCore = "n64".equals(core) || "nds".equals(core);
+            if (playing) activeMap = loadMapping(core);
             inGame = playing;
         }
+
+        /** Controller layout for a system, as JSON {"keycode": emulatorButton}. */
+        @JavascriptInterface
+        public String getMapping(String core) {
+            return prefs().getString("map_" + core, defaultMapping(core).toString());
+        }
+
+        @JavascriptInterface
+        public void setMapping(String core, String json) {
+            prefs().edit().putString("map_" + core, json).apply();
+        }
+
+        @JavascriptInterface
+        public void resetMapping(String core) {
+            prefs().edit().remove("map_" + core).apply();
+        }
+
+        /** The next controller button pressed is reported to the page instead of acting. */
+        @JavascriptInterface
+        public void captureButton() { captureDown = -1; capturing = true; }
+
+        @JavascriptInterface
+        public void cancelCapture() { capturing = false; }
 
         @JavascriptInterface
         public void checkForUpdate(boolean quiet) { updater.check(quiet); }
@@ -161,28 +189,70 @@ public class MainActivity extends Activity {
         return n <= 0 ? 0 : Math.min(MAX_PLAYERS - 1, n - 1);
     }
 
-    /** Controller layout: buttons are matched by position, like RetroArch. */
-    private static int mapButton(int keyCode) {
-        switch (keyCode) {
-            case KeyEvent.KEYCODE_BUTTON_A: return B;      // bottom face button (✕)
-            case KeyEvent.KEYCODE_BUTTON_B: return A;      // right face button (○)
-            case KeyEvent.KEYCODE_BUTTON_X: return Y;      // left face button (▢)
-            case KeyEvent.KEYCODE_BUTTON_Y: return X;      // top face button (△)
-            case KeyEvent.KEYCODE_BUTTON_L1: return L;
-            case KeyEvent.KEYCODE_BUTTON_R1: return R;
-            case KeyEvent.KEYCODE_BUTTON_L2: return L2;
-            case KeyEvent.KEYCODE_BUTTON_R2: return R2;
-            case KeyEvent.KEYCODE_BUTTON_THUMBL: return L3;
-            case KeyEvent.KEYCODE_BUTTON_THUMBR: return R3;
-            case KeyEvent.KEYCODE_BUTTON_START: return START;
-            case KeyEvent.KEYCODE_BUTTON_SELECT: return SELECT;
-            case KeyEvent.KEYCODE_DPAD_UP: return UP;
-            case KeyEvent.KEYCODE_DPAD_DOWN: return DOWN;
-            case KeyEvent.KEYCODE_DPAD_LEFT: return LEFT;
-            case KeyEvent.KEYCODE_DPAD_RIGHT: return RIGHT;
-            case KeyEvent.KEYCODE_DPAD_CENTER: return A;   // remote OK button
-            default: return -1;
+    private android.content.SharedPreferences prefs() {
+        return getSharedPreferences("controls", MODE_PRIVATE);
+    }
+
+    /** Default layout: buttons matched by position, like RetroArch. */
+    static org.json.JSONObject defaultMapping(String core) {
+        boolean analog = "n64".equals(core) || "nds".equals(core);
+        int[][] pairs = {
+                {KeyEvent.KEYCODE_BUTTON_A, B},      // bottom face button (✕)
+                {KeyEvent.KEYCODE_BUTTON_B, A},      // right face button (○)
+                {KeyEvent.KEYCODE_BUTTON_X, Y},      // left face button (▢)
+                {KeyEvent.KEYCODE_BUTTON_Y, X},      // top face button (△)
+                {KeyEvent.KEYCODE_BUTTON_L1, L},
+                {KeyEvent.KEYCODE_BUTTON_R1, R},
+                {KeyEvent.KEYCODE_BUTTON_THUMBL, L3},
+                {KeyEvent.KEYCODE_BUTTON_THUMBR, R3},
+                {KeyEvent.KEYCODE_BUTTON_START, START},
+                {KeyEvent.KEYCODE_BUTTON_SELECT, SELECT},
+                {KeyEvent.KEYCODE_DPAD_UP, UP},
+                {KeyEvent.KEYCODE_DPAD_DOWN, DOWN},
+                {KeyEvent.KEYCODE_DPAD_LEFT, LEFT},
+                {KeyEvent.KEYCODE_DPAD_RIGHT, RIGHT},
+                {KeyEvent.KEYCODE_DPAD_CENTER, A},   // remote OK button
+        };
+        org.json.JSONObject o = new org.json.JSONObject();
+        try {
+            for (int[] p : pairs) o.put(String.valueOf(p[0]), p[1]);
+            if (analog) { // on N64 / DS the triggers are game buttons, not fast-forward / rewind
+                o.put(String.valueOf(KeyEvent.KEYCODE_BUTTON_L2), L2);
+                o.put(String.valueOf(KeyEvent.KEYCODE_BUTTON_R2), R2);
+            }
+        } catch (Exception ignored) {}
+        return o;
+    }
+
+    private android.util.SparseIntArray loadMapping(String core) {
+        android.util.SparseIntArray m = new android.util.SparseIntArray();
+        try {
+            org.json.JSONObject o = new org.json.JSONObject(
+                    prefs().getString("map_" + core, defaultMapping(core).toString()));
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                m.put(Integer.parseInt(k), o.getInt(k));
+            }
+        } catch (Exception e) {
+            return loadMappingDefault(core);
         }
+        return m;
+    }
+
+    private android.util.SparseIntArray loadMappingDefault(String core) {
+        android.util.SparseIntArray m = new android.util.SparseIntArray();
+        org.json.JSONObject o = defaultMapping(core);
+        java.util.Iterator<String> it = o.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            m.put(Integer.parseInt(k), o.optInt(k));
+        }
+        return m;
+    }
+
+    private int mapButton(int keyCode) {
+        return activeMap.get(keyCode, -1);
     }
 
     private void setFast(int player, boolean on) {
@@ -205,6 +275,17 @@ public class MainActivity extends Activity {
 
         if (menuOpen) return super.dispatchKeyEvent(e);
 
+        if (capturing && !inGame) {
+            // Controls screen is waiting for a button
+            if (down && e.getRepeatCount() == 0) captureDown = code;
+            if (up && code == captureDown) {
+                capturing = false;
+                captureDown = -1;
+                js("window.canoeCaptured&&canoeCaptured(" + (code == KeyEvent.KEYCODE_BACK ? -1 : code) + ")");
+            }
+            return true;
+        }
+
         if (inGame) {
             // Back on the remote, or the Home/PS button on a controller, opens the pause menu
             if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_BUTTON_MODE
@@ -214,7 +295,7 @@ public class MainActivity extends Activity {
             }
             int player = playerFor(e.getDevice());
             // Triggers: hold R2 to fast-forward, hold L2 to rewind (systems without L2/R2 buttons)
-            if (!analogCore && (code == KeyEvent.KEYCODE_BUTTON_L2 || code == KeyEvent.KEYCODE_BUTTON_R2)) {
+            if ((code == KeyEvent.KEYCODE_BUTTON_L2 || code == KeyEvent.KEYCODE_BUTTON_R2) && mapButton(code) < 0) {
                 if (e.getRepeatCount() == 0 && (down || up)) {
                     if (code == KeyEvent.KEYCODE_BUTTON_R2) setFast(player, down); else setRewind(player, down);
                 }
@@ -271,6 +352,11 @@ public class MainActivity extends Activity {
         float lt = Math.max(ev.getAxisValue(MotionEvent.AXIS_LTRIGGER), ev.getAxisValue(MotionEvent.AXIS_BRAKE));
         float rt = Math.max(ev.getAxisValue(MotionEvent.AXIS_RTRIGGER), ev.getAxisValue(MotionEvent.AXIS_GAS));
 
+        if (capturing && !inGame && (lt > 0.6f || rt > 0.6f)) {
+            capturing = false;
+            js("window.canoeCaptured&&canoeCaptured(" + (lt > 0.6f ? KeyEvent.KEYCODE_BUTTON_L2 : KeyEvent.KEYCODE_BUTTON_R2) + ")");
+            return true;
+        }
         if (!inGame) {
             // let the stick / hat move around the library
             int key = -1;
@@ -297,9 +383,12 @@ public class MainActivity extends Activity {
         sendDigital(p, LEFT, hatX < -0.5f || (useStickAsDpad && lx < -0.5f));
         sendDigital(p, RIGHT, hatX > 0.5f || (useStickAsDpad && lx > 0.5f));
 
+        // analog triggers: act like the L2 / R2 buttons if they're mapped, otherwise rewind / fast-forward
+        int l2 = mapButton(KeyEvent.KEYCODE_BUTTON_L2), r2 = mapButton(KeyEvent.KEYCODE_BUTTON_R2);
+        if (l2 >= 0) sendDigital(p, l2, lt > 0.5f); else setRewind(p, lt > 0.5f);
+        if (r2 >= 0) sendDigital(p, r2, rt > 0.5f); else setFast(p, rt > 0.5f);
+
         if (analogCore) {
-            sendDigital(p, L2, lt > 0.5f);
-            sendDigital(p, R2, rt > 0.5f);
             sendAnalog(p, LS_RIGHT, lx > 0 ? lx : 0);
             sendAnalog(p, LS_LEFT, lx < 0 ? -lx : 0);
             sendAnalog(p, LS_DOWN, ly > 0 ? ly : 0);
@@ -308,9 +397,6 @@ public class MainActivity extends Activity {
             sendAnalog(p, RS_LEFT, rx < 0 ? -rx : 0);
             sendAnalog(p, RS_DOWN, ry > 0 ? ry : 0);
             sendAnalog(p, RS_UP, ry < 0 ? -ry : 0);
-        } else {
-            setRewind(p, lt > 0.5f);
-            setFast(p, rt > 0.5f);
         }
         return true;
     }

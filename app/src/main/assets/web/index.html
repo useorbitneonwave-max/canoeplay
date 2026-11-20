@@ -246,7 +246,7 @@
       const art = '/api/art?sys=' + encodeURIComponent(g.thumbSystem) + '&stem=' + encodeURIComponent(g.stem);
       return '<div class="tile"><div class="art">' +
         '<div class="ph"><b>' + esc(g.title.charAt(0).toUpperCase()) + '</b><i>' + esc(g.title) + '</i></div>' +
-        '<img loading="lazy" decoding="async" src="' + art + '" onload="artLoaded(this)" onerror="this.remove()">' +
+        '<img loading="lazy" decoding="async" src="' + art + '" onload="artLoaded(this)" onerror="artRetry(this)">' +
         '<span class="badge">' + esc(SHORT[g.system] || g.system) + '</span>' +
         (f.includes(g.id) ? '<span class="star">&#9733;</span>' : '') +
         '</div><div class="name">' + esc(g.title) + '</div><div class="sub">' + esc(g.system) + '</div></div>';
@@ -258,6 +258,13 @@
     if (!shown.length && zone === 'grid') zone = 'side';
     paintFocus();
   }
+  // a cover that failed (e.g. busy network) gets one more try a little later
+  window.artRetry = img => {
+    if (img.dataset.r) { img.remove(); return; }
+    img.dataset.r = '1';
+    const src = img.src;
+    setTimeout(() => { if (img.isConnected) img.src = src + '&r=1'; }, 30000);
+  };
   window.artLoaded = img => {
     img.classList.add('ok');
     const ph = img.parentNode.querySelector('.ph');

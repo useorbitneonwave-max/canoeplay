@@ -5,9 +5,11 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
@@ -15,63 +17,162 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.security.MessageDigest;
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
+import java.util.concurrent.Semaphore;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Finds box art on the free libretro thumbnail server even when the ROM's file name
- * doesn't match exactly (e.g. "Donkey Kong Country (U) (V1.2) [!]").
- * The list of covers for each system is downloaded once and kept for two weeks.
+ * Box art from the free libretro thumbnail collection.
+ * - Gets the list of cover names for each system (from thumbnails.libretro.com, or
+ *   libretro's GitHub copy as a backup) and matches games to it, even with old-style
+ *   file names like "Donkey Kong Country (U) (V1.2) [!]".
+ * - Shrinks each cover once and keeps it on the device.
+ * - Only remembers "no cover" when that's really true, never after a network error.
  */
 public class ArtFinder {
 
     static final String BASE = "https://thumbnails.libretro.com/";
+    static final String RAW = "https://raw.githubusercontent.com/libretro-thumbnails/";
     private static final Pattern HREF = Pattern.compile("href=\"([^\"/?]+\\.png)\"", Pattern.CASE_INSENSITIVE);
-    private static final long MAX_AGE = 14L * 24 * 60 * 60 * 1000;
+    private static final Pattern TREE = Pattern.compile("\"path\"\\s*:\\s*\"Named_Boxarts/([^\"]+)\\.png\"");
+    private static final long LIST_AGE = 14L * 24 * 60 * 60 * 1000;
+    private static final long MISS_AGE = 3L * 24 * 60 * 60 * 1000;
+    private static final long RETRY_LIST_AFTER = 10L * 60 * 1000;
 
     private final File dir;
-    private final File thumbs;
+    private final File covers;
     private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
     private final Map<String, List<String>> lists = new HashMap<>();
-    // normalised name -> real cover names, built once per system for instant lookups
     private final Map<String, Map<String, List<String>>> indexes = new HashMap<>();
-    private final Map<String, String> matches = new HashMap<>();
+    private final Map<String, Long> listFailedAt = new HashMap<>();
+    private final Semaphore downloads = new Semaphore(4); // a few covers at a time
 
     ArtFinder(Context ctx) {
         dir = new File(ctx.getCacheDir(), "art");
         //noinspection ResultOfMethodCallIgnored
         dir.mkdirs();
-        // small copies of covers, kept so the library loads fast and works offline
-        thumbs = new File(ctx.getFilesDir(), "covers");
+        covers = new File(ctx.getFilesDir(), "covers");
         //noinspection ResultOfMethodCallIgnored
-        thumbs.mkdirs();
+        covers.mkdirs();
+        // clear "no cover" notes written by older versions after network errors
+        File[] old = covers.listFiles();
+        if (old != null) for (File f : old) {
+            if (f.getName().endsWith(".none")) //noinspection ResultOfMethodCallIgnored
+                f.delete();
+        }
     }
 
-    /** Full image URL for this game, or null if there's no cover. */
-    String find(String system, String stem) {
-        String key = system + "|" + stem;
-        synchronized (matches) {
-            if (matches.containsKey(key)) return matches.get(key);
+    /** A small JPEG of the cover kept on the device, or null if there isn't one (yet). */
+    File thumb(String system, String stem) {
+        String key = sha1(system + "|" + stem);
+        File jpg = new File(covers, key + ".jpg");
+        File miss = new File(covers, key + ".nocover");
+        if (jpg.isFile()) return jpg;
+        if (miss.isFile() && System.currentTimeMillis() - miss.lastModified() < MISS_AGE) return null;
+
+        Object lock = locks.putIfAbsent(key, new Object());
+        if (lock == null) lock = locks.get(key);
+        synchronized (lock) {
+            if (jpg.isFile()) return jpg;
+            List<String> names = list(system);
+            List<String> candidates = new ArrayList<>();
+            if (names != null) {
+                String best = best(index(system, names), names, stem);
+                if (best != null) candidates.add(best);
+            } else {
+                candidates.addAll(guesses(stem)); // list unavailable: try likely names
+            }
+            if (candidates.isEmpty()) { touch(miss); return null; }
+
+            boolean networkError = false;
+            for (String name : candidates) {
+                List<String> urls = new ArrayList<>();
+                urls.add(BASE + enc(system) + "/Named_Boxarts/" + enc(name) + ".png");
+                if (names != null) urls.add(RAW + repo(system) + "/master/Named_Boxarts/" + enc(name) + ".png");
+                for (String url : urls) {
+                    try {
+                        byte[] data = fetch(url);
+                        if (data != null && save(data, jpg, key)) return jpg;
+                    } catch (Exception e) {
+                        networkError = true;
+                    }
+                }
+            }
+            if (!networkError) touch(miss);
+            return null;
         }
-        List<String> names = list(system);
-        String name;
-        if (names == null) {
-            name = stem.replaceAll("[&*/:`<>?\\\\|\"]", "_"); // offline guess
-        } else {
-            name = best(index(system, names), names, stem);
+    }
+
+    private boolean save(byte[] data, File jpg, String key) throws Exception {
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        BitmapFactory.decodeByteArray(data, 0, data.length, o);
+        if (o.outWidth <= 0) return false;
+        int sample = 1;
+        while (o.outWidth / (sample * 2) >= 400) sample *= 2;
+        BitmapFactory.Options o2 = new BitmapFactory.Options();
+        o2.inSampleSize = sample;
+        Bitmap b = BitmapFactory.decodeByteArray(data, 0, data.length, o2);
+        if (b == null) return false;
+        if (b.getWidth() > 420) {
+            Bitmap sc = Bitmap.createScaledBitmap(b, 400, Math.max(1, b.getHeight() * 400 / b.getWidth()), true);
+            b.recycle();
+            b = sc;
         }
-        String url = name == null ? null : BASE + enc(system) + "/Named_Boxarts/" + enc(name) + ".png";
-        if (names != null) synchronized (matches) { matches.put(key, url); }
-        return url;
+        File tmp = new File(covers, key + ".tmp");
+        FileOutputStream out = new FileOutputStream(tmp);
+        b.compress(Bitmap.CompressFormat.JPEG, 85, out);
+        out.close();
+        b.recycle();
+        return tmp.renameTo(jpg);
+    }
+
+    /** "Donkey Kong Country (U) [!]" -> stem, "Donkey Kong Country (USA)", "(USA, Europe)", ... */
+    static List<String> guesses(String stem) {
+        String title = RomLibrary.cleanTitle(stem);
+        String hint = regionHint(stem);
+        LinkedHashSet<String> g = new LinkedHashSet<>();
+        g.add(stem.replaceAll("[&*/:`<>?\\\\|\"]", "_"));
+        if (hint.equals("europe")) { g.add(title + " (Europe)"); }
+        if (hint.equals("japan")) { g.add(title + " (Japan)"); }
+        g.add(title + " (USA)");
+        g.add(title + " (USA, Europe)");
+        g.add(title + " (World)");
+        g.add(title + " (Europe)");
+        List<String> out = new ArrayList<>();
+        for (String s : g) out.add(s.replaceAll("[&*/:`<>?\\\\|\"]", "_"));
+        return out;
+    }
+
+    private byte[] fetch(String url) throws Exception {
+        downloads.acquire();
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
+            c.setRequestProperty("User-Agent", "CanoePlay");
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(30000);
+            int code = c.getResponseCode();
+            if (code == 404) { c.disconnect(); return null; }          // really not there
+            if (code != 200) { c.disconnect(); throw new Exception("HTTP " + code); }
+            InputStream in = c.getInputStream();
+            ByteArrayOutputStream b = new ByteArrayOutputStream();
+            byte[] buf = new byte[32 * 1024];
+            int n;
+            while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
+            in.close();
+            c.disconnect();
+            return b.toByteArray();
+        } finally {
+            downloads.release();
+        }
     }
 
     private synchronized Map<String, List<String>> index(String system, List<String> names) {
@@ -88,113 +189,37 @@ public class ArtFinder {
         return idx;
     }
 
-    /**
-     * A small JPEG of the cover (about 400 px wide) stored on the device, or null if
-     * this game has no cover. Downloads and shrinks it the first time only.
-     */
-    File thumb(String system, String stem) {
-        String key = sha1(system + "|" + stem);
-        File jpg = new File(thumbs, key + ".jpg");
-        File none = new File(thumbs, key + ".none");
-        if (jpg.isFile()) return jpg;
-        if (none.isFile() && System.currentTimeMillis() - none.lastModified() < MAX_AGE) return null;
-        Object lock = locks.putIfAbsent(key, new Object());
-        if (lock == null) lock = locks.get(key);
-        synchronized (lock) {
-            if (jpg.isFile()) return jpg;
-            String url = find(system, stem);
-            if (url == null) { touch(none); return null; }
-            try {
-                byte[] data = downloadBytes(url);
-                if (data == null) { touch(none); return null; }
-                BitmapFactory.Options o = new BitmapFactory.Options();
-                o.inJustDecodeBounds = true;
-                BitmapFactory.decodeByteArray(data, 0, data.length, o);
-                int sample = 1;
-                while (o.outWidth / (sample * 2) >= 400) sample *= 2;
-                BitmapFactory.Options o2 = new BitmapFactory.Options();
-                o2.inSampleSize = sample;
-                Bitmap b = BitmapFactory.decodeByteArray(data, 0, data.length, o2);
-                if (b == null) { touch(none); return null; }
-                if (b.getWidth() > 420) {
-                    Bitmap s = Bitmap.createScaledBitmap(b, 400, Math.max(1, b.getHeight() * 400 / b.getWidth()), true);
-                    b.recycle();
-                    b = s;
-                }
-                File tmp = new File(thumbs, key + ".tmp");
-                FileOutputStream out = new FileOutputStream(tmp);
-                b.compress(Bitmap.CompressFormat.JPEG, 85, out);
-                out.close();
-                b.recycle();
-                //noinspection ResultOfMethodCallIgnored
-                tmp.renameTo(jpg);
-                return jpg.isFile() ? jpg : null;
-            } catch (Exception e) {
-                return null; // network hiccup: try again next time
-            }
-        }
-    }
-
-    private static byte[] downloadBytes(String url) throws Exception {
-        HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setRequestProperty("User-Agent", "CanoePlay");
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(30000);
-        if (c.getResponseCode() != 200) { c.disconnect(); return null; }
-        InputStream in = c.getInputStream();
-        ByteArrayOutputStream b = new ByteArrayOutputStream();
-        byte[] buf = new byte[32 * 1024];
-        int n;
-        while ((n = in.read(buf)) > 0) b.write(buf, 0, n);
-        in.close();
-        c.disconnect();
-        return b.toByteArray();
-    }
-
-    private static void touch(File f) {
-        try { new FileOutputStream(f).close(); } catch (Exception ignored) {}
-    }
-
-    private static String sha1(String s) {
-        try {
-            byte[] d = MessageDigest.getInstance("SHA-1").digest(s.getBytes("UTF-8"));
-            StringBuilder sb = new StringBuilder();
-            for (byte x : d) sb.append(String.format(Locale.US, "%02x", x));
-            return sb.toString();
-        } catch (Exception e) {
-            return Integer.toHexString(s.hashCode());
-        }
-    }
-
     private synchronized List<String> list(String system) {
         if (lists.containsKey(system)) return lists.get(system);
         File cache = new File(dir, system.replaceAll("[^A-Za-z0-9]", "_") + ".txt");
-        List<String> names = null;
-        if (cache.isFile() && System.currentTimeMillis() - cache.lastModified() < MAX_AGE) {
-            names = readCache(cache);
+        if (cache.isFile() && System.currentTimeMillis() - cache.lastModified() < LIST_AGE) {
+            List<String> names = readCache(cache);
+            if (names != null && !names.isEmpty()) { lists.put(system, names); return names; }
         }
-        if (names == null || names.isEmpty()) {
-            List<String> fresh = download(system);
-            if (fresh != null && !fresh.isEmpty()) {
-                names = fresh;
-                writeCache(cache, fresh);
-            } else if (cache.isFile()) {
-                names = readCache(cache); // old list is better than nothing
-            }
+        Long failed = listFailedAt.get(system);
+        if (failed != null && System.currentTimeMillis() - failed < RETRY_LIST_AFTER) {
+            return cache.isFile() ? readCache(cache) : null;
         }
-        if (names != null && !names.isEmpty()) lists.put(system, names);
-        return names;
+        List<String> fresh = fromLibretroSite(system);
+        if (fresh == null || fresh.size() < 50) fresh = fromGitHub(system);
+        if (fresh != null && fresh.size() >= 50) {
+            writeCache(cache, fresh);
+            lists.put(system, fresh);
+            return fresh;
+        }
+        listFailedAt.put(system, System.currentTimeMillis());
+        return cache.isFile() ? readCache(cache) : null;
     }
 
-    private static List<String> download(String system) {
+    private static List<String> fromLibretroSite(String system) {
         try {
             HttpURLConnection c = (HttpURLConnection) new URL(BASE + enc(system) + "/Named_Boxarts/").openConnection();
             c.setRequestProperty("User-Agent", "CanoePlay");
             c.setConnectTimeout(15000);
-            c.setReadTimeout(30000);
+            c.setReadTimeout(45000);
             if (c.getResponseCode() != 200) return null;
-            BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
             List<String> out = new ArrayList<>();
+            BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
             String line;
             while ((line = r.readLine()) != null) {
                 Matcher m = HREF.matcher(line);
@@ -208,6 +233,36 @@ public class ArtFinder {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** Backup: the same covers are mirrored in libretro's GitHub repositories. */
+    private static List<String> fromGitHub(String system) {
+        try {
+            HttpURLConnection c = (HttpURLConnection) new URL("https://api.github.com/repos/libretro-thumbnails/"
+                    + repo(system) + "/git/trees/master?recursive=1").openConnection();
+            c.setRequestProperty("User-Agent", "CanoePlay");
+            c.setRequestProperty("Accept", "application/vnd.github+json");
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(60000);
+            if (c.getResponseCode() != 200) return null;
+            List<String> out = new ArrayList<>();
+            BufferedReader r = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            char[] buf = new char[16384];
+            int n;
+            while ((n = r.read(buf)) > 0) sb.append(buf, 0, n);
+            r.close();
+            Matcher m = TREE.matcher(sb);
+            while (m.find()) out.add(m.group(1).replace("\\u0026", "&").replace("\\\"", "\""));
+            return out;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** "Nintendo - Super Nintendo Entertainment System" -> "Nintendo_-_Super_Nintendo_Entertainment_System" */
+    static String repo(String system) {
+        return system.replace(' ', '_');
     }
 
     private static List<String> readCache(File f) {
@@ -229,6 +284,21 @@ public class ArtFinder {
             for (String n : names) w.write(n + "\n");
             w.close();
         } catch (Exception ignored) {}
+    }
+
+    private static void touch(File f) {
+        try { new FileOutputStream(f).close(); } catch (Exception ignored) {}
+    }
+
+    private static String sha1(String s) {
+        try {
+            byte[] d = MessageDigest.getInstance("SHA-1").digest(s.getBytes("UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            for (byte x : d) sb.append(String.format(Locale.US, "%02x", x));
+            return sb.toString();
+        } catch (Exception e) {
+            return Integer.toHexString(s.hashCode());
+        }
     }
 
     /** "Legend of Zelda, The - A Link to the Past (U) [!]" -> "legendofzeldaalinktothepast" */

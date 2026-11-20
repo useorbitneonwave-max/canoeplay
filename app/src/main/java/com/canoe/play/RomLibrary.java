@@ -38,6 +38,19 @@ public class RomLibrary {
     static final Sys MD = new Sys("segaMD", "Sega Genesis", "Sega - Mega Drive - Genesis");
     static final Sys SMS = new Sys("segaMS", "Sega Master System", "Sega - Master System - Mark III");
     static final Sys GG = new Sys("segaGG", "Sega Game Gear", "Sega - Game Gear");
+    static final Sys S32X = new Sys("sega32x", "Sega 32X", "Sega - 32X");
+    static final Sys PSX = new Sys("psx", "PlayStation", "Sony - PlayStation");
+    static final Sys PCE = new Sys("pce", "TurboGrafx-16", "NEC - PC Engine - TurboGrafx 16");
+    static final Sys NGP = new Sys("ngp", "Neo Geo Pocket", "SNK - Neo Geo Pocket Color");
+    static final Sys WS = new Sys("ws", "WonderSwan", "Bandai - WonderSwan Color");
+    static final Sys VB = new Sys("vb", "Virtual Boy", "Nintendo - Virtual Boy");
+    static final Sys A2600 = new Sys("atari2600", "Atari 2600", "Atari - 2600");
+    static final Sys A5200 = new Sys("atari5200", "Atari 5200", "Atari - 5200");
+    static final Sys A7800 = new Sys("atari7800", "Atari 7800", "Atari - 7800");
+    static final Sys LYNX = new Sys("lynx", "Atari Lynx", "Atari - Lynx");
+    static final Sys JAG = new Sys("jaguar", "Atari Jaguar", "Atari - Jaguar");
+    static final Sys COLECO = new Sys("coleco", "ColecoVision", "Coleco - ColecoVision");
+    static final Sys ARCADE = new Sys("arcade", "Arcade", "FBNeo - Arcade Games");
 
     static Sys systemForExt(String ext) {
         switch (ext) {
@@ -51,6 +64,18 @@ public class RomLibrary {
             case "md": case "gen": case "smd": return MD;
             case "sms": return SMS;
             case "gg": return GG;
+            case "32x": return S32X;
+            case "chd": case "pbp": case "cue": return PSX;
+            case "pce": return PCE;
+            case "ngp": case "ngc": return NGP;
+            case "ws": case "wsc": return WS;
+            case "vb": case "vboy": return VB;
+            case "a26": return A2600;
+            case "a52": return A5200;
+            case "a78": return A7800;
+            case "lnx": return LYNX;
+            case "j64": case "jag": return JAG;
+            case "col": return COLECO;
             default: return null;
         }
     }
@@ -68,28 +93,44 @@ public class RomLibrary {
     /** True if this file name looks like something we can play (or a zip to peek into). */
     static boolean acceptable(String name) {
         String e = ext(name);
-        return e.equals("zip") || systemForExt(e) != null;
+        return (e.equals("zip") || systemForExt(e) != null) && !e.equals("cue");
     }
 
-    /** Works out the system for a file, looking inside zips. */
+    /**
+     * Works out the system for a file, looking inside zips. A zip with no console game
+     * inside (just chip dumps like "sf2.zip") is treated as an arcade game.
+     */
     static Sys detect(File f) {
         String e = ext(f.getName());
         if (!e.equals("zip")) return systemForExt(e);
+        String parent = f.getParentFile() == null ? "" : f.getParentFile().getName().toLowerCase(Locale.US);
+        if (parent.equals("arcade") || parent.equals("mame") || parent.equals("fbneo") || parent.equals("neogeo")) {
+            return ARCADE;
+        }
         ZipFile zip = null;
+        int files = 0;
         try {
             zip = new ZipFile(f);
             Enumeration<? extends ZipEntry> entries = zip.entries();
             while (entries.hasMoreElements()) {
                 ZipEntry z = entries.nextElement();
                 if (z.isDirectory()) continue;
+                files++;
                 Sys s = systemForExt(ext(z.getName()));
                 if (s != null) return s;
             }
         } catch (IOException ignored) {
+            return null;
         } finally {
             if (zip != null) try { zip.close(); } catch (IOException ignored) {}
         }
-        return null;
+        return files > 0 ? ARCADE : null;
+    }
+
+    /** PlayStation BIOS files, e.g. scph5501.bin (optional: games run without one). */
+    static boolean isBios(String name) {
+        String n = name.toLowerCase(Locale.US);
+        return n.matches("scph[-_]?\\d+[a-z]?\\.bin") || n.matches("psx.*bios.*\\.bin");
     }
 
     private final File internalDir;

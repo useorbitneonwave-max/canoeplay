@@ -23,6 +23,15 @@
   window.EJS_core = core;
   window.EJS_gameUrl = '/rom/' + p.get('id');
   window.EJS_gameName = p.get('stem') || 'game';
+  // PlayStation: use a BIOS file if one was added (most games also run without)
+  if (core === 'psx') {
+    try {
+      const x = new XMLHttpRequest();
+      x.open('HEAD', '/api/bios', false);
+      x.send();
+      if (x.status === 200) window.EJS_biosUrl = '/api/bios';
+    } catch (e) {}
+  }
   // served by the app itself: downloaded once per system, then works offline
   window.EJS_pathtodata = '/ejs/';
   window.EJS_startOnLoaded = true;

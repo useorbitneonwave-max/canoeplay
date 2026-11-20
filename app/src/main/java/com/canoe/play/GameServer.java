@@ -58,6 +58,7 @@ public class GameServer extends NanoHTTPD {
             }
             if (uri.startsWith("/rom/")) return rom(uri.substring("/rom/".length()));
             if (uri.equals("/api/art")) return art(session);
+            if (uri.equals("/api/bios")) return bios();
             if (uri.startsWith("/ejs/")) return emulatorFile(uri.substring("/ejs/".length()));
             if (uri.equals("/api/upload") && session.getMethod() == Method.POST) return upload(session);
             if (uri.equals("/api/delete") && session.getMethod() == Method.POST) return delete(session);
@@ -92,6 +93,19 @@ public class GameServer extends NanoHTTPD {
                 new FileInputStream(f), f.length());
         r.addHeader("Access-Control-Allow-Origin", "*");
         return r;
+    }
+
+    /** The PlayStation BIOS if one was added (games also run without it). */
+    private Response bios() throws IOException {
+        File dir = new File(library.internalDir().getParentFile(), "bios");
+        File[] all = dir.listFiles();
+        File pick = null;
+        if (all != null) for (File f : all) {
+            if (!RomLibrary.isBios(f.getName())) continue;
+            if (pick == null || f.getName().equals("scph5501.bin")) pick = f;
+        }
+        if (pick == null) return newFixedLengthResponse(Response.Status.NOT_FOUND, MIME_PLAINTEXT, "No BIOS");
+        return newFixedLengthResponse(Response.Status.OK, "application/octet-stream", new FileInputStream(pick), pick.length());
     }
 
     private Response emulatorFile(String path) throws IOException {
@@ -136,6 +150,13 @@ public class GameServer extends NanoHTTPD {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT, "No file received");
         }
         String name = new File(names.get(0)).getName().replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (RomLibrary.isBios(name)) {
+            File dir = new File(library.internalDir().getParentFile(), "bios");
+            //noinspection ResultOfMethodCallIgnored
+            dir.mkdirs();
+            copy(new File(tmp), new File(dir, name.toLowerCase(java.util.Locale.US)));
+            return json("{\"ok\":true,\"name\":" + JSONObject.quote(name) + ",\"bios\":true}");
+        }
         if (name.startsWith(".") || !RomLibrary.acceptable(name)) {
             return newFixedLengthResponse(Response.Status.BAD_REQUEST, MIME_PLAINTEXT,
                     "Not a supported game file: " + name);

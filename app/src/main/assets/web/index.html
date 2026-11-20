@@ -132,7 +132,10 @@
 
   const SHORT = { 'Super Nintendo': 'SNES', 'Nintendo (NES)': 'NES', 'Game Boy': 'GB', 'Game Boy Color': 'GBC',
     'Game Boy Advance': 'GBA', 'Nintendo 64': 'N64', 'Nintendo DS': 'NDS', 'Sega Genesis': 'Genesis',
-    'Sega Master System': 'Master System', 'Sega Game Gear': 'Game Gear' };
+    'Sega Master System': 'Master System', 'Sega Game Gear': 'Game Gear', 'Sega 32X': '32X',
+    'PlayStation': 'PS1', 'TurboGrafx-16': 'TG-16', 'Neo Geo Pocket': 'NGP', 'WonderSwan': 'WonderSwan',
+    'Virtual Boy': 'Virtual Boy', 'Atari 2600': 'Atari 2600', 'Atari 5200': 'Atari 5200', 'Atari 7800': 'Atari 7800',
+    'Atari Lynx': 'Lynx', 'Atari Jaguar': 'Jaguar', 'ColecoVision': 'Coleco', 'Arcade': 'Arcade' };
   const ORDER = Object.keys(SHORT);
   const LETTERS = ['All', '#'].concat('ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''));
 
@@ -370,7 +373,11 @@
   const CORES = [
     ['snes', 'Super Nintendo'], ['nes', 'Nintendo (NES)'], ['gb', 'Game Boy / Game Boy Color'],
     ['gba', 'Game Boy Advance'], ['n64', 'Nintendo 64'], ['nds', 'Nintendo DS'],
-    ['segaMD', 'Sega Genesis'], ['segaMS', 'Sega Master System'], ['segaGG', 'Sega Game Gear']
+    ['segaMD', 'Sega Genesis'], ['segaMS', 'Sega Master System'], ['segaGG', 'Sega Game Gear'],
+    ['sega32x', 'Sega 32X'], ['psx', 'PlayStation'], ['arcade', 'Arcade'], ['pce', 'TurboGrafx-16'],
+    ['ngp', 'Neo Geo Pocket'], ['ws', 'WonderSwan'], ['vb', 'Virtual Boy'], ['atari2600', 'Atari 2600'],
+    ['atari5200', 'Atari 5200'], ['atari7800', 'Atari 7800'], ['lynx', 'Atari Lynx'], ['jaguar', 'Atari Jaguar'],
+    ['coleco', 'ColecoVision']
   ];
   // the game's buttons -> emulator button numbers
   const CTL = {
@@ -382,7 +389,22 @@
     nds: [['A', 8], ['B', 0], ['X', 9], ['Y', 1], ['L', 10], ['R', 11], ['Start', 3], ['Select', 2]],
     segaMD: [['A', 1], ['B', 0], ['C', 8], ['X', 10], ['Y', 9], ['Z', 11], ['Start', 3], ['Mode', 2]],
     segaMS: [['Button 1', 0], ['Button 2', 8], ['Pause', 3]],
-    segaGG: [['Button 1', 0], ['Button 2', 8], ['Start', 3]]
+    segaGG: [['Button 1', 0], ['Button 2', 8], ['Start', 3]],
+    sega32x: [['A', 1], ['B', 0], ['C', 8], ['X', 10], ['Y', 9], ['Z', 11], ['Start', 3], ['Mode', 2]],
+    psx: [['✕ Cross', 0], ['○ Circle', 8], ['▢ Square', 1], ['△ Triangle', 9], ['L1', 10], ['R1', 11],
+          ['L2', 12], ['R2', 13], ['Start', 3], ['Select', 2]],
+    arcade: [['Button 1', 0], ['Button 2', 8], ['Button 3', 1], ['Button 4', 9], ['Button 5', 10], ['Button 6', 11],
+             ['Start', 3], ['Insert coin', 2]],
+    pce: [['I', 8], ['II', 0], ['Run', 3], ['Select', 2]],
+    ngp: [['A', 0], ['B', 8], ['Option', 3]],
+    ws: [['A', 8], ['B', 0], ['Start', 3]],
+    vb: [['A', 8], ['B', 0], ['L', 10], ['R', 11], ['Start', 3], ['Select', 2]],
+    atari2600: [['Fire', 0], ['Reset', 3], ['Select', 2]],
+    atari5200: [['Fire 1', 0], ['Fire 2', 8], ['Start', 3], ['Pause', 2]],
+    atari7800: [['Button 1', 0], ['Button 2', 8], ['Pause', 3], ['Select', 2]],
+    lynx: [['A', 8], ['B', 0], ['Option 1', 10], ['Option 2', 11], ['Pause', 3]],
+    jaguar: [['A', 8], ['B', 0], ['C', 1], ['Pause', 3], ['Option', 2]],
+    coleco: [['Left button', 0], ['Right button', 8], ['Keypad *', 3], ['Keypad #', 2]]
   };
   // Android key codes -> names on a PlayStation-style controller
   const KEYNAME = { 96: '✕ Cross', 97: '○ Circle', 99: '▢ Square', 100: '△ Triangle', 98: 'C', 101: 'Z',

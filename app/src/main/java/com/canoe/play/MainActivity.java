@@ -130,7 +130,7 @@ public class MainActivity extends Activity {
     class Bridge {
         @JavascriptInterface
         public void setInGame(boolean playing, String core) {
-            analogCore = "n64".equals(core) || "nds".equals(core);
+            analogCore = "n64".equals(core) || "nds".equals(core) || "psx".equals(core);
             if (playing) {
                 activeMap = loadMapping(core);
                 runOnUiThread(new Runnable() { @Override public void run() { playerOrder.clear(); } });
@@ -215,7 +215,7 @@ public class MainActivity extends Activity {
 
     /** Default layout: buttons matched by position, like RetroArch. */
     static org.json.JSONObject defaultMapping(String core) {
-        boolean analog = "n64".equals(core) || "nds".equals(core);
+        boolean analog = "n64".equals(core) || "nds".equals(core) || "psx".equals(core);
         int[][] pairs = {
                 {KeyEvent.KEYCODE_BUTTON_A, B},      // bottom face button (✕)
                 {KeyEvent.KEYCODE_BUTTON_B, A},      // right face button (○)
